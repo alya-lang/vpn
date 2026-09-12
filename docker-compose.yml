@@ -6,7 +6,7 @@ services:
     container_name: alya-vpn-server
     restart: unless-stopped
     ports:
-      - "51820:51820"
+      - "51821:51820"
     environment:
       - TZ=UTC
     healthcheck:
