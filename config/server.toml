@@ -1,5 +1,5 @@
 # Alya VPN - Server Configuration
 [server]
-port = 51820
+port = 51821
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
