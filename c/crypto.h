@@ -11,6 +11,11 @@ extern "C" {
 // Hashes a user passphrase into a 64-character hex key (SHA-256)
 void alya_vpn_derive_key(const char *passphrase, char *out_key_hex);
 
+// Session passphrase / key cache (stored in native C memory, immune to Alya bump allocator wrap)
+void alya_vpn_set_session_passphrase(const char *passphrase);
+void alya_vpn_set_session_key(const char *key_hex);
+const char *alya_vpn_get_session_key(void);
+
 // Generates a random 24-character hex nonce (12 bytes)
 void alya_vpn_gen_nonce(char *out_nonce_hex);
 

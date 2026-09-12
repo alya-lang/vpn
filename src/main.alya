@@ -193,7 +193,6 @@ function main()
         return 0
     end
 
-
     # --- COMMAND: CLIENT ---
     if cmd == "client"
         let srv_host = "127.0.0.1"
@@ -291,41 +290,29 @@ function main()
         print_banner()
         say("[BENCH] Initializing 256-bit ChaCha20-Poly1305 throughput test...")
         let key = crypto::vpn_derive_key("bench_secret_key_123456789")
-        let nonce = crypto::vpn_gen_nonce()
         let chunk = "The quick brown fox jumps over the lazy dog! 1234567890\r\n"
-        let payload = ""
-        let count = 0
-        while count < 200 # ~11 KB payload
-            payload += chunk
-            count += 1
-        end
+        let p8 = chunk + chunk + chunk + chunk + chunk + chunk + chunk + chunk
+        let payload = p8 + p8 + p8 + p8 # ~1.8 KB payload
 
-        let iters = 500
-        say("[BENCH] Encrypting " + len(payload) + " bytes x " + iters + " iterations...")
+        let iters = 1000
+        say("[BENCH] Running " + iters + " full AEAD envelope pack/unpack cycles (" + len(payload) + " bytes each)...")
 
         let i = 0
         while i < iters
-            let cipher, tag, err = crypto::vpn_encrypt(key, nonce, payload)
-            if err != 0
-                say("[BENCH] Error during iteration " + i)
+            let frame = proto::pack_frame(key, proto::msg_data(), payload)
+            if frame == null
+                say("[BENCH] Packing error at iteration " + i)
+                return 1
+            end
+            let msg_type, plain = proto::unpack_frame(key, frame)
+            if msg_type != proto::msg_data() or plain == null
+                say("[BENCH] Unpacking error at iteration " + i)
                 return 1
             end
             i += 1
         end
 
-        say("[BENCH] Decrypting and authenticating Poly1305 MAC tag x " + iters + " iterations...")
-        let cipher, tag, err = crypto::vpn_encrypt(key, nonce, payload)
-        let j = 0
-        while j < iters
-            let plain = crypto::vpn_decrypt(key, nonce, cipher, tag)
-            if plain == null
-                say("[BENCH] Verification error at iteration " + j)
-                return 1
-            end
-            j += 1
-        end
-
-        say("[BENCH] 500 AEAD roundtrips completed successfully with 100% integrity!")
+        say("[BENCH] 1000 AEAD roundtrips completed successfully with 100% integrity!")
         return 0
     end
 

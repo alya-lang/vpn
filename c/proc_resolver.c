@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <ctype.h>
 
 #if defined(__GNUC__) || defined(__clang__)
 static void __attribute__((constructor)) init_unbuffered_io(void) {
@@ -419,4 +420,364 @@ int alya_vpn_sock_send_hex(int sock, const char *hex_str, int hex_len) {
     }
     return total_sent;
 }
+
+// ============================================================================
+// Split-Tunneling Routing Engine (Native C, immune to cyclic buffer wrap)
+// ============================================================================
+
+#if defined(_WIN32)
+#define ALYA_STRICMP _stricmp
+#define ALYA_STRNICMP _strnicmp
+#else
+#include <strings.h>
+#define ALYA_STRICMP strcasecmp
+#define ALYA_STRNICMP strncasecmp
+#endif
+
+static int s_split_mode = 0; // 0 = all, 1 = include, 2 = exclude
+static char s_split_apps[128][64];
+static int s_split_app_count = 0;
+
+static int pattern_match_c(const char *pattern, const char *text) {
+    if (!pattern || !text || !pattern[0] || !text[0]) return 0;
+
+    // Case-insensitive exact match
+    if (ALYA_STRICMP(pattern, text) == 0) return 1;
+
+    // .exe suffix tolerance (e.g. "discord" matches "discord.exe" or vice versa)
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%s.exe", pattern);
+    if (ALYA_STRICMP(buf, text) == 0) return 1;
+    snprintf(buf, sizeof(buf), "%s.exe", text);
+    if (ALYA_STRICMP(pattern, buf) == 0) return 1;
+
+    // Wildcard match: *substring*, *suffix, prefix*
+    size_t plen = strlen(pattern);
+    size_t tlen = strlen(text);
+    if (plen >= 2 && pattern[0] == '*' && pattern[plen - 1] == '*') {
+        char inner[128];
+        size_t ilen = plen - 2;
+        if (ilen >= sizeof(inner)) return 0;
+        memcpy(inner, pattern + 1, ilen);
+        inner[ilen] = '\0';
+        char p_lower[128], t_lower[128];
+        for (size_t i = 0; i <= ilen; ++i) p_lower[i] = (char)tolower((unsigned char)inner[i]);
+        if (tlen >= sizeof(t_lower)) return 0;
+        for (size_t i = 0; i <= tlen; ++i) t_lower[i] = (char)tolower((unsigned char)text[i]);
+        return strstr(t_lower, p_lower) != NULL;
+    }
+    if (pattern[0] == '*' && plen > 1) {
+        const char *suffix = pattern + 1;
+        size_t slen = strlen(suffix);
+        if (tlen >= slen && ALYA_STRICMP(text + (tlen - slen), suffix) == 0) return 1;
+    }
+    if (plen > 1 && pattern[plen - 1] == '*') {
+        char prefix[128];
+        size_t prlen = plen - 1;
+        if (prlen >= sizeof(prefix)) return 0;
+        memcpy(prefix, pattern, prlen);
+        prefix[prlen] = '\0';
+        if (tlen >= prlen && ALYA_STRNICMP(prefix, text, prlen) == 0) return 1;
+    }
+
+    return 0;
+}
+
+void alya_vpn_set_routing(int mode, const char *apps_csv) {
+    s_split_mode = mode;
+    s_split_app_count = 0;
+    if (!apps_csv || !apps_csv[0]) return;
+
+    const char *start = apps_csv;
+    while (*start && s_split_app_count < 128) {
+        while (*start == ' ' || *start == ',' || *start == '\t' || *start == '\r' || *start == '\n') start++;
+        if (!*start) break;
+        const char *end = start;
+        while (*end && *end != ',' && *end != '\r' && *end != '\n') end++;
+        size_t len = (size_t)(end - start);
+        while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t')) len--;
+        if (len > 0 && len < 64) {
+            memcpy(s_split_apps[s_split_app_count], start, len);
+            s_split_apps[s_split_app_count][len] = '\0';
+            s_split_app_count++;
+        }
+        start = end;
+    }
+}
+
+int alya_vpn_should_route(const char *proc_name) {
+    if (s_split_mode == 0) return 1; // all
+    if (!proc_name || !proc_name[0]) {
+        return (s_split_mode == 2) ? 1 : 0;
+    }
+    int matched = 0;
+    for (int i = 0; i < s_split_app_count; ++i) {
+        if (pattern_match_c(s_split_apps[i], proc_name)) {
+            matched = 1;
+            break;
+        }
+    }
+    if (s_split_mode == 1) { // Whitelist: only matched apps use VPN
+        return matched ? 1 : 0;
+    }
+    if (s_split_mode == 2) { // Blacklist: matched apps bypass VPN
+        return matched ? 0 : 1;
+    }
+    return 1;
+}
+
+int alya_vpn_check_peer_route(int peer_port, char *out_proc_name, int max_len) {
+    if (!out_proc_name || max_len <= 0) return 1;
+    out_proc_name[0] = '\0';
+    int res = alya_vpn_get_process_by_port(peer_port, out_proc_name, max_len);
+    if (!res || !out_proc_name[0]) {
+        strncpy(out_proc_name, "unknown", (size_t)max_len - 1);
+        out_proc_name[max_len - 1] = '\0';
+    }
+    return alya_vpn_should_route(out_proc_name);
+}
+
+// ============================================================================
+// Native Channel & Direct Connection Tables (O(1) lookup, 0 heap allocations)
+// ============================================================================
+
+#define ALYA_MAX_CHANNELS 2048
+
+typedef struct {
+    int in_use;
+    int channel_id;
+    int app_sock;
+} AlyaChannelEntry;
+
+typedef struct {
+    int in_use;
+    int app_sock;
+    int dest_sock;
+} AlyaDirectEntry;
+
+typedef struct {
+    int in_use;
+    int channel_id;
+    int dest_sock;
+} AlyaSrvChannelEntry;
+
+static AlyaChannelEntry s_client_channels[ALYA_MAX_CHANNELS];
+static AlyaDirectEntry s_client_directs[ALYA_MAX_CHANNELS];
+static AlyaSrvChannelEntry s_server_channels[ALYA_MAX_CHANNELS];
+
+// Client Channel Table
+void alya_vpn_ch_set(int channel_id, int app_sock) {
+    int free_slot = -1;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_channels[i].in_use && s_client_channels[i].channel_id == channel_id) {
+            s_client_channels[i].app_sock = app_sock;
+            return;
+        }
+        if (!s_client_channels[i].in_use && free_slot < 0) {
+            free_slot = i;
+        }
+    }
+    if (free_slot >= 0) {
+        s_client_channels[free_slot].in_use = 1;
+        s_client_channels[free_slot].channel_id = channel_id;
+        s_client_channels[free_slot].app_sock = app_sock;
+    }
+}
+
+int alya_vpn_ch_get(int channel_id) {
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_channels[i].in_use && s_client_channels[i].channel_id == channel_id) {
+            return s_client_channels[i].app_sock;
+        }
+    }
+    return -1;
+}
+
+void alya_vpn_ch_remove(int channel_id) {
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_channels[i].in_use && s_client_channels[i].channel_id == channel_id) {
+            s_client_channels[i].in_use = 0;
+            s_client_channels[i].channel_id = 0;
+            s_client_channels[i].app_sock = -1;
+            return;
+        }
+    }
+}
+
+int alya_vpn_ch_count(void) {
+    int count = 0;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_channels[i].in_use) count++;
+    }
+    return count;
+}
+
+int alya_vpn_ch_id_at(int index) {
+    int count = 0;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_channels[i].in_use) {
+            if (count == index) return s_client_channels[i].channel_id;
+            count++;
+        }
+    }
+    return 0;
+}
+
+int alya_vpn_ch_sock_at(int index) {
+    int count = 0;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_channels[i].in_use) {
+            if (count == index) return s_client_channels[i].app_sock;
+            count++;
+        }
+    }
+    return -1;
+}
+
+void alya_vpn_ch_clear(void) {
+    memset(s_client_channels, 0, sizeof(s_client_channels));
+}
+
+// Client Direct Connections
+void alya_vpn_direct_set(int app_sock, int dest_sock) {
+    int free_slot = -1;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_directs[i].in_use && s_client_directs[i].app_sock == app_sock) {
+            s_client_directs[i].dest_sock = dest_sock;
+            return;
+        }
+        if (!s_client_directs[i].in_use && free_slot < 0) free_slot = i;
+    }
+    if (free_slot >= 0) {
+        s_client_directs[free_slot].in_use = 1;
+        s_client_directs[free_slot].app_sock = app_sock;
+        s_client_directs[free_slot].dest_sock = dest_sock;
+    }
+}
+
+int alya_vpn_direct_get(int app_sock) {
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_directs[i].in_use && s_client_directs[i].app_sock == app_sock) {
+            return s_client_directs[i].dest_sock;
+        }
+    }
+    return -1;
+}
+
+void alya_vpn_direct_remove(int app_sock) {
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_directs[i].in_use && s_client_directs[i].app_sock == app_sock) {
+            s_client_directs[i].in_use = 0;
+            s_client_directs[i].app_sock = -1;
+            s_client_directs[i].dest_sock = -1;
+            return;
+        }
+    }
+}
+
+int alya_vpn_direct_count(void) {
+    int count = 0;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_directs[i].in_use) count++;
+    }
+    return count;
+}
+
+int alya_vpn_direct_app_at(int index) {
+    int count = 0;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_directs[i].in_use) {
+            if (count == index) return s_client_directs[i].app_sock;
+            count++;
+        }
+    }
+    return -1;
+}
+
+int alya_vpn_direct_dest_at(int index) {
+    int count = 0;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_client_directs[i].in_use) {
+            if (count == index) return s_client_directs[i].dest_sock;
+            count++;
+        }
+    }
+    return -1;
+}
+
+void alya_vpn_direct_clear(void) {
+    memset(s_client_directs, 0, sizeof(s_client_directs));
+}
+
+// Server Channel Table
+void alya_vpn_srv_ch_set(int channel_id, int dest_sock) {
+    int free_slot = -1;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_server_channels[i].in_use && s_server_channels[i].channel_id == channel_id) {
+            s_server_channels[i].dest_sock = dest_sock;
+            return;
+        }
+        if (!s_server_channels[i].in_use && free_slot < 0) free_slot = i;
+    }
+    if (free_slot >= 0) {
+        s_server_channels[free_slot].in_use = 1;
+        s_server_channels[free_slot].channel_id = channel_id;
+        s_server_channels[free_slot].dest_sock = dest_sock;
+    }
+}
+
+int alya_vpn_srv_ch_get(int channel_id) {
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_server_channels[i].in_use && s_server_channels[i].channel_id == channel_id) {
+            return s_server_channels[i].dest_sock;
+        }
+    }
+    return -1;
+}
+
+void alya_vpn_srv_ch_remove(int channel_id) {
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_server_channels[i].in_use && s_server_channels[i].channel_id == channel_id) {
+            s_server_channels[i].in_use = 0;
+            s_server_channels[i].channel_id = 0;
+            s_server_channels[i].dest_sock = -1;
+            return;
+        }
+    }
+}
+
+int alya_vpn_srv_ch_count(void) {
+    int count = 0;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_server_channels[i].in_use) count++;
+    }
+    return count;
+}
+
+int alya_vpn_srv_ch_id_at(int index) {
+    int count = 0;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_server_channels[i].in_use) {
+            if (count == index) return s_server_channels[i].channel_id;
+            count++;
+        }
+    }
+    return 0;
+}
+
+int alya_vpn_srv_ch_sock_at(int index) {
+    int count = 0;
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (s_server_channels[i].in_use) {
+            if (count == index) return s_server_channels[i].dest_sock;
+            count++;
+        }
+    }
+    return -1;
+}
+
+void alya_vpn_srv_ch_clear(void) {
+    memset(s_server_channels, 0, sizeof(s_server_channels));
+}
+
 

@@ -320,11 +320,44 @@ static void poly1305_mac(
 // Public API Implementations
 // ============================================================================
 
+static char s_session_key_hex[65] = {0};
+static uint8_t s_session_key_bin[32] = {0};
+static int s_has_session_key = 0;
+
 void alya_vpn_derive_key(const char *passphrase, char *out_key_hex) {
-    if (!passphrase || !out_key_hex) return;
+    if (!passphrase) return;
     uint8_t hash[32];
     sha256_hash((const uint8_t *)passphrase, strlen(passphrase), hash);
-    bytes_to_hex(hash, 32, out_key_hex);
+    if (out_key_hex) {
+        bytes_to_hex(hash, 32, out_key_hex);
+    }
+    bytes_to_hex(hash, 32, s_session_key_hex);
+    memcpy(s_session_key_bin, hash, 32);
+    s_has_session_key = 1;
+}
+
+void alya_vpn_set_session_key(const char *key_hex) {
+    if (!key_hex) return;
+    if (strlen(key_hex) >= 64) {
+        memcpy(s_session_key_hex, key_hex, 64);
+        s_session_key_hex[64] = '\0';
+        if (hex_to_bytes(s_session_key_hex, 64, s_session_key_bin, 32) == 0) {
+            s_has_session_key = 1;
+        }
+    }
+}
+
+void alya_vpn_set_session_passphrase(const char *passphrase) {
+    if (!passphrase) return;
+    alya_vpn_derive_key(passphrase, s_session_key_hex);
+    s_session_key_hex[64] = '\0';
+    if (hex_to_bytes(s_session_key_hex, 64, s_session_key_bin, 32) == 0) {
+        s_has_session_key = 1;
+    }
+}
+
+const char *alya_vpn_get_session_key(void) {
+    return s_session_key_hex;
 }
 
 void alya_vpn_gen_nonce(char *out_nonce_hex) {
@@ -342,14 +375,22 @@ int alya_vpn_encrypt(
     char *out_cipher_hex,
     char *out_tag_hex
 ) {
-    if (!key_hex || !nonce_hex || !plaintext || plain_len < 0 || !out_cipher_hex || !out_tag_hex) {
+    if (!plaintext || plain_len < 0 || !out_cipher_hex || !out_tag_hex) {
         return -2;
     }
 
     uint8_t key[32];
     uint8_t nonce[12];
-    if (hex_to_bytes(key_hex, 64, key, 32) != 0 || hex_to_bytes(nonce_hex, 24, nonce, 12) != 0) {
-        return -2;
+    if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        if (s_has_session_key) {
+            memcpy(key, s_session_key_bin, 32);
+        } else {
+            return -2;
+        }
+    }
+
+    if (!nonce_hex || hex_to_bytes(nonce_hex, 24, nonce, 12) != 0) {
+        get_random_bytes(nonce, 12);
     }
 
     // 1. One-time Poly1305 key generation via ChaCha20 block 0
@@ -382,7 +423,7 @@ int alya_vpn_decrypt(
     const char *tag_hex,
     char *out_plain
 ) {
-    if (!key_hex || !nonce_hex || !cipher_hex || cipher_len < 0 || !tag_hex || !out_plain) {
+    if (!cipher_hex || cipher_len < 0 || !tag_hex || !out_plain) {
         return -2;
     }
 
@@ -390,8 +431,15 @@ int alya_vpn_decrypt(
     uint8_t nonce[12];
     uint8_t expected_tag[16];
 
-    if (hex_to_bytes(key_hex, 64, key, 32) != 0 ||
-        hex_to_bytes(nonce_hex, 24, nonce, 12) != 0 ||
+    if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        if (s_has_session_key) {
+            memcpy(key, s_session_key_bin, 32);
+        } else {
+            return -2;
+        }
+    }
+
+    if (!nonce_hex || hex_to_bytes(nonce_hex, 24, nonce, 12) != 0 ||
         hex_to_bytes(tag_hex, 32, expected_tag, 16) != 0) {
         return -2;
     }
@@ -441,11 +489,18 @@ int alya_vpn_unpack_frame_type(void) {
 }
 
 const char *alya_vpn_pack_frame(const char *key_hex, int msg_type, const char *payload, int payload_len) {
-    if (!key_hex || msg_type <= 0 || payload_len < 0) return "";
-    if (payload_len > 32768) return "";
+    if (msg_type <= 0 || payload_len < 0 || payload_len > 32768) {
+        return "";
+    }
 
     uint8_t key[32];
-    if (hex_to_bytes(key_hex, 64, key, 32) != 0) return "";
+    if (!key_hex || strlen(key_hex) < 64 || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        if (s_has_session_key) {
+            memcpy(key, s_session_key_bin, 32);
+        } else {
+            return "";
+        }
+    }
 
     // Generate random 12-byte nonce
     uint8_t nonce[12];
@@ -488,7 +543,7 @@ const char *alya_vpn_pack_frame(const char *key_hex, int msg_type, const char *p
 
 const char *alya_vpn_unpack_frame(const char *key_hex, const char *frame_line, int frame_len) {
     s_last_unpack_type = 0;
-    if (!key_hex || !frame_line || frame_len < 62) return "";
+    if (!frame_line || frame_len < 62) return "";
 
     // Strip trailing \r / \n
     while (frame_len > 0 && (frame_line[frame_len - 1] == '\n' || frame_line[frame_len - 1] == '\r')) {
@@ -501,7 +556,13 @@ const char *alya_vpn_unpack_frame(const char *key_hex, const char *frame_line, i
     }
 
     uint8_t key[32];
-    if (hex_to_bytes(key_hex, 64, key, 32) != 0) return "";
+    if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        if (s_has_session_key) {
+            memcpy(key, s_session_key_bin, 32);
+        } else {
+            return "";
+        }
+    }
 
     // Message type
     uint8_t type_byte = 0;

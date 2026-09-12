@@ -7,10 +7,8 @@ import "../common/crypto.alya" as crypto
 import "../common/protocol.alya" as proto
 import "../ffi.alya"
 
-# Channel registry: maps channel_id to active destination socket
-# Structure: map of channel_id -> target_socket
-
 function vpn_run_server(listen_port, passphrase)
+    alya_vpn_set_session_passphrase(passphrase)
     let key = crypto::vpn_derive_key(passphrase)
     let server_sock = net::tcp_listen(listen_port, 32)
     if server_sock < 0
@@ -45,8 +43,7 @@ end
 
 # Handles a single connected client session
 function vpn_handle_client(client_sock, session_key)
-    # Channel map: channel_id -> target_socket
-    let channels = map()
+    alya_vpn_srv_ch_clear()
 
     let running = 1
     let buffer = ""
@@ -62,7 +59,6 @@ function vpn_handle_client(client_sock, session_key)
             end
             buffer += chunk
 
-
             # Process full newline-delimited frames
             while 1
                 let nl_idx = proto::find_char(buffer, "\n")
@@ -77,52 +73,60 @@ function vpn_handle_client(client_sock, session_key)
                 if msg_type == 0 or payload == null
                     say("[WARN] Authentication/Integrity check failed for incoming frame, dropping")
                 else
-                    vpn_process_client_message(client_sock, session_key, channels, msg_type, payload)
+                    vpn_process_client_message(client_sock, session_key, msg_type, payload)
                 end
             end
         end
 
         # 2. Check active destination channels for incoming response data
-        for ch_id in keys(channels)
-            let ch_key = "" + ch_id
-            let dest_sock = channels[ch_key]
-            let poll_dest = net::tcp_poll(dest_sock, 5)
-            if poll_dest == 1
-                let dest_hex = alya_vpn_sock_recv_hex(dest_sock, 4096)
-                if len(dest_hex) == 0
-                    # Destination closed connection
-                    say("[FORWARD] Target remote closed channel " + ch_id)
-                    let close_payload = "" + ch_id + "|EOF"
-                    let close_frame = proto::pack_frame(session_key, proto::msg_close(), close_payload)
-                    if close_frame != null
-                        net::tcp_send(client_sock, close_frame)
-                    end
-                    net::tcp_close(dest_sock)
-                    channels.remove(ch_key)
-                else
-                    # Encrypt and forward received data back to client
-                    let data_payload = proto::pack_data_payload(proto::parse_number(ch_key), dest_hex)
-                    let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
-                    if data_frame != null
-                        net::tcp_send(client_sock, data_frame)
+        let si = alya_vpn_srv_ch_count() - 1
+        while si >= 0
+            let ch_id = alya_vpn_srv_ch_id_at(si)
+            let dest_sock = alya_vpn_srv_ch_sock_at(si)
+            if dest_sock >= 0
+                let poll_dest = net::tcp_poll(dest_sock, 5)
+                if poll_dest == 1
+                    let dest_hex = alya_vpn_sock_recv_hex(dest_sock, 4096)
+                    if len(dest_hex) == 0
+                        # Destination closed connection
+                        say("[FORWARD] Target remote closed channel " + ch_id)
+                        let close_payload = "" + ch_id + "|EOF"
+                        let close_frame = proto::pack_frame(session_key, proto::msg_close(), close_payload)
+                        if close_frame != null
+                            net::tcp_send(client_sock, close_frame)
+                        end
+                        net::tcp_close(dest_sock)
+                        alya_vpn_srv_ch_remove(ch_id)
+                    else
+                        # Encrypt and forward received data back to client
+                        let data_payload = proto::pack_data_payload(ch_id, dest_hex)
+                        let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
+                        if data_frame != null
+                            net::tcp_send(client_sock, data_frame)
+                        end
                     end
                 end
             end
+            si -= 1
         end
     end
 
-
     # Clean up any open channels on client disconnect
-    for ch_id in keys(channels)
-        let ch_key = "" + ch_id
-        let s = channels[ch_key]
-        net::tcp_close(s)
+    let total = alya_vpn_srv_ch_count()
+    let ci = 0
+    while ci < total
+        let s = alya_vpn_srv_ch_sock_at(ci)
+        if s >= 0
+            net::tcp_close(s)
+        end
+        ci += 1
     end
+    alya_vpn_srv_ch_clear()
     net::tcp_close(client_sock)
 end
 
 # Processes decrypted message from client
-function vpn_process_client_message(client_sock, session_key, channels, msg_type, payload)
+function vpn_process_client_message(client_sock, session_key, msg_type, payload)
     # CONNECT REQUEST
     if msg_type == proto::msg_connect_req()
         let ok, ch_id, proto_type, host, port = proto::unpack_connect_req_payload(payload)
@@ -143,8 +147,7 @@ function vpn_process_client_message(client_sock, session_key, channels, msg_type
             return 0
         end
 
-        let ch_key = "" + ch_id
-        channels[ch_key] = target_sock
+        alya_vpn_srv_ch_set(ch_id, target_sock)
         say("[FORWARD] Connected to " + host + ":" + port + " (Channel " + ch_id + ")")
 
         let ok_payload = proto::pack_connect_resp_payload(ch_id, proto::status_ok(), "Connected")
@@ -162,24 +165,23 @@ function vpn_process_client_message(client_sock, session_key, channels, msg_type
             return 0
         end
 
-        let ch_key = "" + ch_id
-        if channels.has(ch_key)
-            let target_sock = channels[ch_key]
+        let target_sock = alya_vpn_srv_ch_get(ch_id)
+        if target_sock >= 0
             alya_vpn_sock_send_hex(target_sock, raw_hex, len(raw_hex))
         end
         return 1
     end
 
-
     # CHANNEL CLOSE
     if msg_type == proto::msg_close()
         let ok, ch_id, reason = proto::unpack_close_payload(payload)
-        let ch_key = "" + ch_id
-        if ok == 1 and channels.has(ch_key)
-            let s = channels[ch_key]
-            net::tcp_close(s)
-            channels.remove(ch_key)
-            say("[FORWARD] Closed channel " + ch_id)
+        if ok == 1
+            let s = alya_vpn_srv_ch_get(ch_id)
+            if s >= 0
+                net::tcp_close(s)
+                alya_vpn_srv_ch_remove(ch_id)
+                say("[FORWARD] Closed channel " + ch_id)
+            end
         end
         return 1
     end

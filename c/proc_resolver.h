@@ -27,6 +27,54 @@ const char *alya_vpn_sock_recv_hex(int sock, int max_bytes);
 // Returns number of binary bytes sent (< 0 on error).
 int alya_vpn_sock_send_hex(int sock, const char *hex_str, int hex_len);
 
+// ============================================================================
+// Split-Tunneling Routing Engine (Native C, immune to cyclic buffer wrap)
+// ============================================================================
+
+// Sets split-tunneling routing mode and application list
+// mode: 0 = ALL, 1 = INCLUDE (whitelist), 2 = EXCLUDE (blacklist)
+// apps_csv: comma-separated app names or patterns (e.g. "chrome.exe,curl.exe,discord")
+void alya_vpn_set_routing(int mode, const char *apps_csv);
+
+// Resolves process from local peer port and determines whether it should route via VPN.
+// Fills out_proc_name with the resolved process name.
+// Returns 1 (route via VPN tunnel) or 0 (direct connection / bypass).
+int alya_vpn_check_peer_route(int peer_port, char *out_proc_name, int max_len);
+
+// Directly checks if a process name matches configured routing rules.
+int alya_vpn_should_route(const char *proc_name);
+
+// ============================================================================
+// Native Channel & Direct Connection Tables (O(1) lookup, 0 heap allocations)
+// ============================================================================
+
+// Client Channel Table: channel_id -> app_sock
+void alya_vpn_ch_set(int channel_id, int app_sock);
+int  alya_vpn_ch_get(int channel_id);
+void alya_vpn_ch_remove(int channel_id);
+int  alya_vpn_ch_count(void);
+int  alya_vpn_ch_id_at(int index);
+int  alya_vpn_ch_sock_at(int index);
+void alya_vpn_ch_clear(void);
+
+// Client Direct Connection Table: app_sock -> dest_sock
+void alya_vpn_direct_set(int app_sock, int dest_sock);
+int  alya_vpn_direct_get(int app_sock);
+void alya_vpn_direct_remove(int app_sock);
+int  alya_vpn_direct_count(void);
+int  alya_vpn_direct_app_at(int index);
+int  alya_vpn_direct_dest_at(int index);
+void alya_vpn_direct_clear(void);
+
+// Server Channel Table: channel_id -> dest_sock
+void alya_vpn_srv_ch_set(int channel_id, int dest_sock);
+int  alya_vpn_srv_ch_get(int channel_id);
+void alya_vpn_srv_ch_remove(int channel_id);
+int  alya_vpn_srv_ch_count(void);
+int  alya_vpn_srv_ch_id_at(int index);
+int  alya_vpn_srv_ch_sock_at(int index);
+void alya_vpn_srv_ch_clear(void);
+
 #ifdef __cplusplus
 }
 #endif

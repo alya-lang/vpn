@@ -4,16 +4,8 @@
 import "../ffi.alya"
 import "../common/crypto.alya" as crypto
 
-# Resolves TCP local port to process name (e.g. "Discord.exe", "chrome.exe")
-# Returns lowercase process name, or empty string if not found or system process
-function resolve_tcp_process(local_port)
-    let buf = "" + crypto::alloc_str(260)
-    let res = alya_vpn_get_process_by_port(local_port, buf, 256)
-    if res == 0
-        return ""
-    end
-
-    # Read until null terminator
+# Extracts null-terminated C string from buffer
+function extract_c_string(buf)
     let name = ""
     let slen = len(buf)
     let i = 0
@@ -25,8 +17,18 @@ function resolve_tcp_process(local_port)
         name += ch
         i += 1
     end
+    return name
+end
 
-    return lower(name)
+# Resolves TCP local port to process name (e.g. "Discord.exe", "chrome.exe")
+# Returns lowercase process name, or empty string if not found or system process
+function resolve_tcp_process(local_port)
+    let buf = "" + crypto::alloc_str(260)
+    let res = alya_vpn_get_process_by_port(local_port, buf, 256)
+    if res == 0
+        return ""
+    end
+    return lower(extract_c_string(buf))
 end
 
 # Resolves UDP local port to process name

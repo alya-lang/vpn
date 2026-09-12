@@ -15,4 +15,41 @@ extern "C"
     function alya_vpn_sock_recv_hex(sock: i32, max_bytes: i32) -> str
     function alya_vpn_sock_send_hex(sock: i32, hex_str: str, hex_len: i32) -> i32
     function alya_vpn_pack_data_payload(channel_id: i32, hex_data: str) -> str
+
+    # Session key management in native C
+    function alya_vpn_set_session_passphrase(passphrase: str) -> void
+    function alya_vpn_set_session_key(key_hex: str) -> void
+    function alya_vpn_get_session_key() -> str
+
+    # Native Routing Engine (immune to string buffer wrap-around)
+    function alya_vpn_set_routing(mode: i32, apps_csv: str) -> void
+    function alya_vpn_check_peer_route(peer_port: i32, out_proc_name: ptr, max_len: i32) -> i32
+    function alya_vpn_should_route(proc_name: str) -> i32
+
+    # Client Channel Table (O(1), zero Alya allocations)
+    function alya_vpn_ch_set(channel_id: i32, app_sock: i32) -> void
+    function alya_vpn_ch_get(channel_id: i32) -> i32
+    function alya_vpn_ch_remove(channel_id: i32) -> void
+    function alya_vpn_ch_count() -> i32
+    function alya_vpn_ch_id_at(index: i32) -> i32
+    function alya_vpn_ch_sock_at(index: i32) -> i32
+    function alya_vpn_ch_clear() -> void
+
+    # Client Direct Bypass Table
+    function alya_vpn_direct_set(app_sock: i32, dest_sock: i32) -> void
+    function alya_vpn_direct_get(app_sock: i32) -> i32
+    function alya_vpn_direct_remove(app_sock: i32) -> void
+    function alya_vpn_direct_count() -> i32
+    function alya_vpn_direct_app_at(index: i32) -> i32
+    function alya_vpn_direct_dest_at(index: i32) -> i32
+    function alya_vpn_direct_clear() -> void
+
+    # Server Channel Table
+    function alya_vpn_srv_ch_set(channel_id: i32, dest_sock: i32) -> void
+    function alya_vpn_srv_ch_get(channel_id: i32) -> i32
+    function alya_vpn_srv_ch_remove(channel_id: i32) -> void
+    function alya_vpn_srv_ch_count() -> i32
+    function alya_vpn_srv_ch_id_at(index: i32) -> i32
+    function alya_vpn_srv_ch_sock_at(index: i32) -> i32
+    function alya_vpn_srv_ch_clear() -> void
 end
