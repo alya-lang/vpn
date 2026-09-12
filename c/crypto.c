@@ -49,10 +49,13 @@ static void bytes_to_hex(const uint8_t *bytes, size_t len, char *out_hex) {
 
 static void get_random_bytes(uint8_t *buf, size_t len) {
 #if defined(_WIN32)
-    HCRYPTPROV hProv = 0;
-    if (CryptAcquireContextA(&hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT | CRYPT_SILENT)) {
-        CryptGenRandom(hProv, (DWORD)len, buf);
-        CryptReleaseContext(hProv, 0);
+    static HCRYPTPROV s_hProv = 0;
+    if (!s_hProv) {
+        if (!CryptAcquireContextA(&s_hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT | CRYPT_SILENT)) {
+            CryptAcquireContextA(&s_hProv, NULL, NULL, PROV_RSA_FULL, CRYPT_NEWKEYSET | CRYPT_SILENT);
+        }
+    }
+    if (s_hProv && CryptGenRandom(s_hProv, (DWORD)len, buf)) {
         return;
     }
 #else

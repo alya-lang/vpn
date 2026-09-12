@@ -1,0 +1,37 @@
+# Micro-benchmark for Alya VPN Cryptography Engine
+import "../src/common/crypto.alya" as crypto
+
+function main()
+    say("=== Alya VPN Cryptography Benchmark ===")
+    let key = crypto::vpn_derive_key("benchmark-shared-passphrase-2026")
+    let payload = "STREAM_DATA_CHUNK_FOR_SPEED_EVALUATION_1234567890_ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    let total_iterations = 1000
+    say("[Benchmark] Running " + total_iterations + " ChaCha20-Poly1305 AEAD roundtrips...")
+
+    let fail_count = 0
+    let i = 0
+    while i < total_iterations
+        if i % 100 == 0
+            key = crypto::vpn_derive_key("benchmark-shared-passphrase-2026")
+        end
+        let nonce = crypto::vpn_gen_nonce()
+        let cipher, tag, err = crypto::vpn_encrypt(key, nonce, payload)
+        if err != 0
+            fail_count += 1
+        end
+
+        let decrypted = crypto::vpn_decrypt(key, nonce, cipher, tag)
+        if decrypted == null
+            fail_count += 1
+        end
+        i += 1
+    end
+
+    if fail_count == 0
+        say("[Benchmark] Result: " + total_iterations + "/" + total_iterations + " roundtrips succeeded with 100% cryptographic integrity!")
+    else
+        say("[Benchmark] Result: " + fail_count + " failures encountered.")
+    end
+end
+
+main()

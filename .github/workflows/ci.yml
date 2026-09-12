@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    name: Test on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Alya Compiler
+        uses: alya-lang/setup-alya@v1
+        with:
+          version: 'latest'
+
+      - name: Verify alyac installation
+        run: |
+          alyac --version
+
+      - name: Run crypto test suite
+        run: |
+          alyac run tests/test_crypto.alya
+
+      - name: Run protocol test suite
+        run: |
+          alyac run tests/test_protocol.alya
+
+      - name: Run routing rules test suite
+        run: |
+          alyac run tests/test_rules.alya
+
+      - name: Run end-to-end flow test suite
+        run: |
+          alyac run tests/test_e2e.alya
+
+      - name: Run benchmark
+        run: |
+          alyac run src/main.alya -- benchmark

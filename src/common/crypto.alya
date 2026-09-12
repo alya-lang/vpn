@@ -18,16 +18,16 @@ end
 
 # Derives a 32-byte (64 hex characters) symmetric encryption key from a passphrase
 function vpn_derive_key(passphrase)
-    let buf = alloc_str(64)
+    let buf = alloc_str(68)
     alya_vpn_derive_key(passphrase, buf)
-    return buf
+    return buf.substring(0, 64)
 end
 
 # Generates a random 12-byte (24 hex characters) cryptographic nonce
 function vpn_gen_nonce()
-    let buf = alloc_str(24)
+    let buf = alloc_str(28)
     alya_vpn_gen_nonce(buf)
-    return buf
+    return buf.substring(0, 24)
 end
 
 # Encrypts plaintext payload using ChaCha20-Poly1305 AEAD
@@ -35,11 +35,11 @@ end
 function vpn_encrypt(key_hex, nonce_hex, plaintext)
     let p_len = len(plaintext)
     let c_len = p_len * 2
-    let cipher_buf = "" + alloc_str(c_len)
-    let tag_buf = "" + alloc_str(32)
+    let cipher_buf = "" + alloc_str(c_len + 8)
+    let tag_buf = "" + alloc_str(40)
 
     let res = alya_vpn_encrypt(key_hex, nonce_hex, plaintext, p_len, cipher_buf, tag_buf)
-    return cipher_buf, tag_buf, res
+    return cipher_buf.substring(0, c_len), tag_buf.substring(0, 32), res
 end
 
 # Decrypts ciphertext and verifies Poly1305 integrity tag
@@ -47,12 +47,12 @@ end
 function vpn_decrypt(key_hex, nonce_hex, cipher_hex, tag_hex)
     let c_len = len(cipher_hex)
     let p_len = c_len / 2
-    let plain_buf = "" + alloc_str(p_len)
+    let plain_buf = "" + alloc_str(p_len + 8)
 
     let res = alya_vpn_decrypt(key_hex, nonce_hex, cipher_hex, c_len, tag_hex, plain_buf)
     if res != 0
         return null # Integrity check failed or invalid format
     end
 
-    return plain_buf
+    return plain_buf.substring(0, p_len)
 end

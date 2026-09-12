@@ -1,0 +1,43 @@
+# Alya VPN Split-Tunneling Demo
+import "../src/common/crypto.alya" as crypto
+import "../src/client/router.alya" as router
+
+function main()
+    say("==================================================")
+    say("         Alya VPN Split-Tunneling Demo            ")
+    say("==================================================")
+
+    # 1. Derive session key
+    let key = crypto::vpn_derive_key("demo-vpn-shared-secret")
+    say("[Demo] Derived 256-bit AES/ChaCha Session Key: " + key.substring(0, 16) + "...")
+
+    # 2. Configure Split Tunneling - Mode INCLUDE (Whitelist)
+    # Only Discord and Steam will use the VPN tunnel
+    let whitelist = ["Discord.exe", "discord", "steam*"]
+    say("[Demo] Configured Whitelist: Discord.exe, discord, steam*")
+
+    let apps_to_test = [
+        "Discord.exe",
+        "chrome.exe",
+        "steamwebhelper.exe",
+        "spotify.exe",
+        "qBittorrent.exe"
+    ]
+
+    say("\n[Routing Evaluation]")
+    let i = 0
+    while i < len(apps_to_test)
+        let app = apps_to_test[i]
+        let use_vpn = router::should_route_through_vpn(router::mode_include(), whitelist, app)
+        if use_vpn == 1
+            say("  -> " + app + " => [TUNNEL: VPN Remote VPS]")
+        else
+            say("  -> " + app + " => [DIRECT: Local ISP WAN]")
+        end
+        i += 1
+    end
+
+    say("\nDemo completed successfully!")
+end
+
+main()
