@@ -1,0 +1,122 @@
+# Alya VPN - Split Tunneling Router
+# Evaluates routing decisions per-application (Include vs Exclude modes)
+
+# Split Tunneling Modes
+function mode_all() return 0 end
+function mode_include() return 1 end  # Whitelist: Only listed apps use VPN
+function mode_exclude() return 2 end  # Blacklist: Listed apps bypass VPN, all others use VPN
+
+# Checks if target string matches pattern with optional leading/trailing wildcard '*'
+function pattern_match(pattern, text)
+    let plen = len(pattern)
+    let tlen = len(text)
+    if plen == 0
+        return 0
+    end
+
+    let p = lower(pattern)
+    let t = lower(text)
+
+    # Exact match
+    if p == t
+        return 1
+    end
+
+    # Handle .exe suffix tolerance (e.g. "discord" matches "discord.exe")
+    if t == (p + ".exe")
+        return 1
+    end
+    if (t + ".exe") == p
+        return 1
+    end
+
+    # Wildcard match: *substring*
+    let has_prefix_star = char_at(p, 0) == "*"
+    let has_suffix_star = char_at(p, plen - 1) == "*"
+
+    if has_prefix_star and has_suffix_star
+        let inner = p.substring(1, plen - 2)
+        if len(inner) == 0
+            return 1
+        end
+        # Check substring containment
+        let ilen = len(inner)
+        if ilen > tlen
+            return 0
+        end
+        let max_idx = tlen - ilen
+        let i = 0
+        while i <= max_idx
+            if t.substring(i, ilen) == inner
+                return 1
+            end
+            i += 1
+        end
+        return 0
+    end
+
+    # Prefix wildcard: *suffix
+    if has_prefix_star
+        let suffix = p.substring(1, plen - 1)
+        let slen = len(suffix)
+        if slen > tlen
+            return 0
+        end
+        return t.substring(tlen - slen, slen) == suffix
+    end
+
+    # Suffix wildcard: prefix*
+    if has_suffix_star
+        let prefix = p.substring(0, plen - 1)
+        let prlen = len(prefix)
+        if prlen > tlen
+            return 0
+        end
+        return t.substring(0, prlen) == prefix
+    end
+
+    return 0
+end
+
+# Checks if a process name matches any pattern in the list
+function process_matches_any(app_list, proc_name)
+    if len(proc_name) == 0
+        return 0
+    end
+
+    let count = len(app_list)
+    let i = 0
+    while i < count
+        let rule = app_list[i]
+        if pattern_match(rule, proc_name) == 1
+            return 1
+        end
+        i += 1
+    end
+
+    return 0
+end
+
+# Evaluates whether traffic from a specific process should route through the VPN
+# Returns 1 (route via VPN tunnel) or 0 (direct connection / bypass VPN)
+function should_route_through_vpn(mode, app_list, proc_name)
+    if mode == 0 # mode_all
+        return 1
+    end
+
+    let matches = process_matches_any(app_list, proc_name)
+
+    if mode == 1 # mode_include (Whitelist: only matched processes use VPN)
+        return matches
+    end
+
+    if mode == 2 # mode_exclude (Blacklist: matched processes bypass VPN)
+        if matches == 1
+            return 0 # Bypass VPN
+        else
+            return 1 # Route through VPN
+        end
+    end
+
+    return 1 # Default fallback to VPN
+end

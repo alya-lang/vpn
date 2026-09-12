@@ -1,0 +1,47 @@
+# Unit tests for Alya VPN Split Tunneling Rules
+import "std/test"
+import "../src/client/router.alya" as router
+
+function main()
+    test_suite("Alya VPN Split Tunneling Rules Suite")
+    let r = runner_new()
+
+    # 1. Pattern matching tests
+    runner_assert_eq(r, router::pattern_match("discord", "discord.exe"), 1, "discord should match discord.exe")
+    runner_assert_eq(r, router::pattern_match("Discord.exe", "discord"), 1, "Discord.exe should match discord")
+    runner_assert_eq(r, router::pattern_match("chrome", "chrome.exe"), 1, "chrome should match chrome.exe")
+    runner_assert_eq(r, router::pattern_match("chrome", "firefox.exe"), 0, "chrome should not match firefox.exe")
+
+    # 2. Wildcard pattern matching
+    runner_assert_eq(r, router::pattern_match("steam*", "steamwebhelper.exe"), 1, "steam* should match steamwebhelper.exe")
+    runner_assert_eq(r, router::pattern_match("*cord.exe", "discord.exe"), 1, "*cord.exe should match discord.exe")
+    runner_assert_eq(r, router::pattern_match("*riot*", "RiotClientServices.exe"), 1, "*riot* should match RiotClientServices.exe")
+    runner_assert_eq(r, router::pattern_match("*riot*", "LeagueClient.exe"), 0, "*riot* should not match LeagueClient.exe")
+
+    # 3. Split Tunneling: Mode ALL
+    let empty_list = []
+    runner_assert_eq(r, router::should_route_through_vpn(router::mode_all(), empty_list, "any_app.exe"), 1, "Mode ALL routes everything via VPN")
+
+    # 4. Split Tunneling: Mode INCLUDE (Whitelist)
+    # User requirement: "vpn kullanırken sadece discord uygulamasında çalışsın"
+    let whitelist = ["discord", "steam*"]
+    runner_assert_eq(r, router::should_route_through_vpn(router::mode_include(), whitelist, "Discord.exe"), 1, "Discord should use VPN in include mode")
+    runner_assert_eq(r, router::should_route_through_vpn(router::mode_include(), whitelist, "steamwebhelper.exe"), 1, "Steam should use VPN in include mode")
+    runner_assert_eq(r, router::should_route_through_vpn(router::mode_include(), whitelist, "chrome.exe"), 0, "Chrome should NOT use VPN in include mode")
+    runner_assert_eq(r, router::should_route_through_vpn(router::mode_include(), whitelist, "spotify.exe"), 0, "Spotify should NOT use VPN in include mode")
+
+    # 5. Split Tunneling: Mode EXCLUDE (Blacklist)
+    # User requirement: "vpn kullanırken discord adlı uygulamada çalışmasın"
+    let blacklist = ["discord", "torrent*"]
+    runner_assert_eq(r, router::should_route_through_vpn(router::mode_exclude(), blacklist, "Discord.exe"), 0, "Discord should BYPASS VPN in exclude mode")
+    runner_assert_eq(r, router::should_route_through_vpn(router::mode_exclude(), blacklist, "torrent_client.exe"), 0, "Torrent should BYPASS VPN in exclude mode")
+    runner_assert_eq(r, router::should_route_through_vpn(router::mode_exclude(), blacklist, "chrome.exe"), 1, "Chrome SHOULD use VPN in exclude mode")
+    runner_assert_eq(r, router::should_route_through_vpn(router::mode_exclude(), blacklist, "curl.exe"), 1, "Curl SHOULD use VPN in exclude mode")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

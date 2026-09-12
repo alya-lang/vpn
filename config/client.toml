@@ -1,0 +1,19 @@
+# Alya VPN - Client Configuration
+[client]
+server_host = "127.0.0.1"
+server_port = 51820
+local_proxy_port = 1080
+passphrase = "change_me_to_a_secure_shared_passphrase_2026"
+protocol = "tcp"
+
+[split_tunnel]
+# Modes:
+#   "all"     - Route all network traffic through the encrypted VPN tunnel.
+#   "include" - (Whitelist) Only specified applications route through VPN; all others use direct local internet.
+#   "exclude" - (Blacklist) Specified applications bypass VPN (direct internet); all other apps route through VPN.
+mode = "exclude"
+apps = [
+    "Discord.exe",
+    "discord",
+    "steamwebhelper.exe"
+]

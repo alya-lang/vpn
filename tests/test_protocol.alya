@@ -1,0 +1,45 @@
+# Unit tests for Alya VPN Framing and Protocol
+import "std/test"
+import "../src/common/crypto.alya" as crypto
+import "../src/common/protocol.alya" as proto
+
+function main()
+    test_suite("Alya VPN Protocol Framing Suite")
+    let r = runner_new()
+
+    let key = crypto::vpn_derive_key("my_vpn_shared_secret_key_2026")
+
+    # 1. Connect request payload packing & unpacking
+    let c_payload = proto::pack_connect_req_payload(42, proto::proto_tcp(), "discord.com", 443)
+    let c_unpacked = proto::unpack_connect_req_payload(c_payload)
+    runner_assert_eq(r, c_unpacked["channel_id"], 42, "Channel ID should match 42")
+    runner_assert_eq(r, c_unpacked["proto"], proto::proto_tcp(), "Proto should be TCP (1)")
+    runner_assert_str_eq(r, c_unpacked["target_host"], "discord.com", "Target host should be discord.com")
+    runner_assert_eq(r, c_unpacked["target_port"], 443, "Target port should be 443")
+
+    # 2. Data payload packing & unpacking
+    let d_payload = proto::pack_data_payload(42, "GET /api/v9/gateway HTTP/1.1\r\nHost: discord.com\r\n\r\n")
+    let d_unpacked = proto::unpack_data_payload(d_payload)
+    runner_assert_eq(r, d_unpacked["channel_id"], 42, "Data Channel ID should match")
+    runner_assert_str_eq(r, d_unpacked["data"], "GET /api/v9/gateway HTTP/1.1\r\nHost: discord.com\r\n\r\n", "Data payload must match")
+
+    # 3. Full Frame packing, encryption, and unpacking
+    let frame = proto::pack_frame(key, proto::msg_data(), d_payload)
+    runner_assert_eq(r, len(frame) > 62, true, "Encrypted frame must be longer than 62 chars")
+
+    let msg_type, decrypted_payload = proto::unpack_frame(key, frame)
+    runner_assert_eq(r, msg_type, proto::msg_data(), "Decrypted message type must be MSG_DATA (5)")
+    runner_assert_str_eq(r, decrypted_payload, d_payload, "Decrypted payload must match original d_payload")
+
+    # 4. Tamper detection (Poly1305 MAC failure)
+    let tampered_frame = frame.substring(0, 64) + "00" + frame.substring(66)
+    let t_type, t_payload = proto::unpack_frame(key, tampered_frame)
+    runner_assert_eq(r, t_payload, null, "Tampered frame must fail Poly1305 MAC check")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

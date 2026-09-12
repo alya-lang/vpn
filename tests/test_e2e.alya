@@ -1,0 +1,84 @@
+# End-to-End Simulation Test for Alya VPN
+import "std/test"
+import "../src/common/crypto.alya" as crypto
+import "../src/common/protocol.alya" as proto
+import "../src/client/router.alya" as router
+
+function main()
+    test_suite("Alya VPN End-to-End Flow Suite")
+    let r = runner_new()
+
+    # 1. Key derivation from shared passphrase
+    let key = crypto::vpn_derive_key("ultra-secure-vpn-psk-2026")
+    runner_assert_eq(r, len(key), 64, "Derived 256-bit session key should be 64 hex chars")
+
+    # 2. Split-Tunneling Decision Flow (Discord vs Browser)
+    # Whitelist mode: only discord and steam use the VPN tunnel
+    let whitelist = ["discord", "steam*"]
+    let app1 = "Discord.exe"
+    let app2 = "chrome.exe"
+    let route_discord = router::should_route_through_vpn(router::mode_include(), whitelist, app1)
+    let route_chrome = router::should_route_through_vpn(router::mode_include(), whitelist, app2)
+
+    runner_assert_eq(r, route_discord, 1, "Discord should be selected for VPN tunnel")
+    runner_assert_eq(r, route_chrome, 0, "Chrome should bypass VPN tunnel directly")
+
+    # 3. Channel Initialization & Connect Packet over Tunnel
+    let ch_id = 1001
+    let conn_payload = proto::pack_connect_req_payload(ch_id, proto::proto_tcp(), "gateway.discord.gg", 443)
+    let conn_frame = proto::pack_frame(key, proto::msg_connect_req(), conn_payload)
+    runner_assert_eq(r, len(conn_frame) > 62, true, "Encrypted connect frame is well-formed")
+
+    # Server receives and unpacks connect frame
+    let s_msg_type, s_payload = proto::unpack_frame(key, conn_frame)
+    runner_assert_eq(r, s_msg_type, proto::msg_connect_req(), "Server validated connect message type")
+    let unpacked_conn = proto::unpack_connect_req_payload(s_payload)
+    runner_assert_eq(r, unpacked_conn["channel_id"], 1001, "Server verified channel ID")
+    runner_assert_eq(r, unpacked_conn["proto"], proto::proto_tcp(), "Server verified protocol TCP")
+    runner_assert_str_eq(r, unpacked_conn["target_host"], "gateway.discord.gg", "Target host matches")
+    runner_assert_eq(r, unpacked_conn["target_port"], 443, "Target port matches 443")
+
+    # 4. Data Transfer: Client -> Server
+    let client_data = "TLS_CLIENT_HELLO_DATA_PAYLOAD_FOR_DISCORD"
+    let client_d_payload = proto::pack_data_payload(ch_id, client_data)
+    let client_frame = proto::pack_frame(key, proto::msg_data(), client_d_payload)
+    
+    let server_msg_type, server_payload = proto::unpack_frame(key, client_frame)
+    runner_assert_eq(r, server_msg_type, proto::msg_data(), "Server validated data message type")
+    let server_unpacked_data = proto::unpack_data_payload(server_payload)
+    runner_assert_eq(r, server_unpacked_data["channel_id"], 1001, "Data channel matches 1001")
+    runner_assert_str_eq(r, server_unpacked_data["data"], client_data, "Server received exact client payload")
+
+    # 5. Data Transfer: Server -> Client (Response)
+    let server_reply = "TLS_SERVER_CERTIFICATE_AND_HELLO_DONE"
+    let server_r_payload = proto::pack_data_payload(ch_id, server_reply)
+    let server_frame = proto::pack_frame(key, proto::msg_data(), server_r_payload)
+
+    let client_msg_type, client_payload = proto::unpack_frame(key, server_frame)
+    runner_assert_eq(r, client_msg_type, proto::msg_data(), "Client validated response data message type")
+    let client_unpacked_data = proto::unpack_data_payload(client_payload)
+    runner_assert_eq(r, client_unpacked_data["channel_id"], 1001, "Client received response on channel 1001")
+    runner_assert_str_eq(r, client_unpacked_data["data"], server_reply, "Client received exact server reply")
+
+    # 6. Channel Teardown (Close Packet)
+    let close_payload = proto::pack_close_payload(ch_id, 0)
+    let close_frame = proto::pack_frame(key, proto::msg_close(), close_payload)
+
+    let close_type, close_unpacked_payload = proto::unpack_frame(key, close_frame)
+    runner_assert_eq(r, close_type, proto::msg_close(), "Close message type validated")
+    let unpacked_close = proto::unpack_close_payload(close_unpacked_payload)
+    runner_assert_eq(r, unpacked_close["channel_id"], 1001, "Closed channel matches 1001")
+    runner_assert_eq(r, unpacked_close["reason"], 0, "Clean close reason code is 0")
+
+    # 7. Wire Tampering Rejection during Active Stream
+    let corrupted_frame = client_frame.substring(0, 60) + "FF" + client_frame.substring(62)
+    let corrupt_type, corrupt_payload = proto::unpack_frame(key, corrupted_frame)
+    runner_assert_eq(r, corrupt_payload, null, "Corrupted wire frame immediately rejected by ChaCha20-Poly1305 MAC")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

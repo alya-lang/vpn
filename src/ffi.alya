@@ -1,0 +1,11 @@
+# Alya VPN - Native Foreign Function Interface (FFI) declarations
+# Connects Alya runtime to high-speed ChaCha20-Poly1305 and OS process inspection engine
+
+extern "C"
+    function alya_vpn_derive_key(passphrase: str, out_key_hex: ptr) -> void
+    function alya_vpn_gen_nonce(out_nonce_hex: ptr) -> void
+    function alya_vpn_encrypt(key_hex: str, nonce_hex: str, plaintext: str, plain_len: i32, out_cipher_hex: ptr, out_tag_hex: ptr) -> i32
+    function alya_vpn_decrypt(key_hex: str, nonce_hex: str, cipher_hex: str, cipher_len: i32, tag_hex: str, out_plain: ptr) -> i32
+    function alya_vpn_get_process_by_port(local_port: i32, out_name: ptr, max_len: i32) -> i32
+    function alya_vpn_get_udp_process_by_port(local_port: i32, out_name: ptr, max_len: i32) -> i32
+end

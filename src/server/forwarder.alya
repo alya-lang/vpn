@@ -1,0 +1,195 @@
+# Alya VPN - Server Engine and Traffic Forwarder
+# Listens for client tunnels, authenticates frames, and forwards payload traffic to destination hosts
+
+import "std/net" as net
+import "std/os" as os
+import "../common/crypto.alya" as crypto
+import "../common/protocol.alya" as proto
+
+# Channel registry: maps channel_id to active destination socket
+# Structure: map of channel_id -> target_socket
+
+function vpn_run_server(listen_port, passphrase)
+    let key = crypto::vpn_derive_key(passphrase)
+    let server_sock = net::tcp_listen(listen_port, 32)
+    if server_sock < 0
+        say("[ERROR] Failed to bind VPN server to port " + listen_port)
+        return 1
+    end
+
+    say("[INFO] ========================================")
+    say("[INFO] Alya VPN Server running on port " + listen_port)
+    say("[INFO] Encryption: ChaCha20-Poly1305 AEAD (256-bit)")
+    say("[INFO] Waiting for incoming client connections...")
+    say("[INFO] ========================================")
+
+    while 1
+        # Poll for new client connection (500ms timeout)
+        let poll_res = net::tcp_poll(server_sock, 500)
+        if poll_res == 1
+            let client_sock = net::tcp_accept(server_sock)
+            if client_sock >= 0
+                let client_ip = net::tcp_peer_ip(client_sock)
+                let client_port = net::tcp_peer_port(client_sock)
+                say("[INFO] Client connected from " + client_ip + ":" + client_port)
+                vpn_handle_client(client_sock, key)
+                say("[INFO] Client disconnected: " + client_ip + ":" + client_port)
+            end
+        end
+    end
+
+    net::tcp_close(server_sock)
+    return 0
+end
+
+# Handles a single connected client session
+function vpn_handle_client(client_sock, session_key)
+    # Channel map: channel_id -> target_socket
+    let channels = map()
+
+    let running = 1
+    let buffer = ""
+
+    while running == 1
+        # 1. Check if client sent data
+        let poll_client = net::tcp_poll(client_sock, 10)
+        if poll_client == 1
+            let chunk = net::tcp_recv(client_sock, 8192)
+            if len(chunk) == 0
+                # Client disconnected
+                running = 0
+                break
+            end
+            buffer += chunk
+
+            # Process full newline-delimited frames
+            while 1
+                let nl_idx = proto::find_char(buffer, "\n")
+                if nl_idx < 0
+                    break
+                end
+
+                let frame_line = buffer.substring(0, nl_idx)
+                buffer = buffer.substring(nl_idx + 1)
+
+                let msg_type, payload = proto::unpack_frame(session_key, frame_line)
+                if msg_type == 0 or payload == null
+                    say("[WARN] Authentication/Integrity check failed for incoming frame, dropping")
+                else
+                    vpn_process_client_message(client_sock, session_key, channels, msg_type, payload)
+                end
+            end
+        end
+
+        # 2. Check active destination channels for incoming response data
+        for ch_id in keys(channels)
+            let dest_sock = channels[ch_id]
+            let poll_dest = net::tcp_poll(dest_sock, 5)
+            if poll_dest == 1
+                let dest_data = net::tcp_recv(dest_sock, 8192)
+                if len(dest_data) == 0
+                    # Destination closed connection
+                    say("[FORWARD] Target remote closed channel " + ch_id)
+                    let close_payload = "" + ch_id + "|EOF"
+                    let close_frame = proto::pack_frame(session_key, proto::msg_close(), close_payload)
+                    if close_frame != null
+                        net::tcp_send(client_sock, close_frame)
+                    end
+                    net::tcp_close(dest_sock)
+                    channels.remove(ch_id)
+                else
+                    # Encrypt and forward received data back to client
+                    let data_payload = proto::pack_data_payload(ch_id, dest_data)
+                    let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
+                    if data_frame != null
+                        net::tcp_send(client_sock, data_frame)
+                    end
+                end
+            end
+        end
+    end
+
+    # Clean up any open channels on client disconnect
+    for ch_id in keys(channels)
+        let s = channels[ch_id]
+        net::tcp_close(s)
+    end
+    net::tcp_close(client_sock)
+end
+
+# Processes decrypted message from client
+function vpn_process_client_message(client_sock, session_key, channels, msg_type, payload)
+    # CONNECT REQUEST
+    if msg_type == proto::msg_connect_req()
+        let req = proto::unpack_connect_req_payload(payload)
+        if req == null
+            return 0
+        end
+
+        let ch_id = req["channel_id"]
+        let host = req["target_host"]
+        let port = req["target_port"]
+        say("[FORWARD] CONNECT requested: Channel " + ch_id + " -> " + host + ":" + port)
+
+        let target_sock = net::tcp_connect(host, port)
+        if target_sock < 0
+            say("[FORWARD] Failed to connect to " + host + ":" + port)
+            let resp_payload = proto::pack_connect_resp_payload(ch_id, proto::status_connect_failed(), "Connection refused")
+            let resp_frame = proto::pack_frame(session_key, proto::msg_connect_resp(), resp_payload)
+            if resp_frame != null
+                net::tcp_send(client_sock, resp_frame)
+            end
+            return 0
+        end
+
+        channels[ch_id] = target_sock
+        say("[FORWARD] Connected to " + host + ":" + port + " (Channel " + ch_id + ")")
+
+        let ok_payload = proto::pack_connect_resp_payload(ch_id, proto::status_ok(), "Connected")
+        let ok_frame = proto::pack_frame(session_key, proto::msg_connect_resp(), ok_payload)
+        if ok_frame != null
+            net::tcp_send(client_sock, ok_frame)
+        end
+        return 1
+    end
+
+    # DATA FORWARD
+    if msg_type == proto::msg_data()
+        let data_pkg = proto::unpack_data_payload(payload)
+        if data_pkg == null
+            return 0
+        end
+
+        let ch_id = data_pkg["channel_id"]
+        let raw_data = data_pkg["data"]
+
+        if channels.has(ch_id)
+            let target_sock = channels[ch_id]
+            net::tcp_send(target_sock, raw_data)
+        end
+        return 1
+    end
+
+    # CHANNEL CLOSE
+    if msg_type == proto::msg_close()
+        let ch_id = proto::parse_number(payload)
+        if channels.has(ch_id)
+            let s = channels[ch_id]
+            net::tcp_close(s)
+            channels.remove(ch_id)
+            say("[FORWARD] Closed channel " + ch_id)
+        end
+        return 1
+    end
+
+    # PING / KEEP-ALIVE
+    if msg_type == proto::msg_ping()
+        let pong_frame = proto::pack_frame(session_key, proto::msg_pong(), "PONG")
+        if pong_frame != null
+            net::tcp_send(client_sock, pong_frame)
+        end
+        return 1
+    end
+
+    return 0
+end

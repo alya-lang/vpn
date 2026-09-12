@@ -1,0 +1,18 @@
+[package]
+name = "vpn"
+version = "0.1.0"
+alya-version = "0.0.14"
+entry = "src/main.alya"
+description = "High-performance split-tunneling VPN server and client for Alya"
+authors = ["Alya Language Contributors <https://github.com/alya-lang>"]
+license = "MIT"
+homepage = "https://github.com/alya-lang/alya"
+repository = "https://github.com/alya-lang/vpn"
+keywords = ["alya", "vpn", "tunnel", "network", "split-tunneling", "proxy", "security"]
+
+[dependencies]
+
+[build]
+c-sources = ["c/crypto.c", "c/proc_resolver.c"]
+c-flags = ["-O2"]
+c-include-dirs = ["c"]

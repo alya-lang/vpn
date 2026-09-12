@@ -1,0 +1,41 @@
+# Cryptography Unit Test for Alya VPN
+import "std/test"
+import "../src/common/crypto.alya" as vpn_crypto
+
+function main()
+    test_suite("Alya VPN Crypto Test Suite")
+    let r = runner_new()
+
+    # 1. Key derivation
+    let key = vpn_crypto::vpn_derive_key("my_ultra_secret_vpn_passphrase_2026")
+    runner_assert_eq(r, len(key), 64, "Key should be 64 hex characters (32 bytes)")
+
+    # 2. Nonce generation
+    let nonce1 = vpn_crypto::vpn_gen_nonce()
+    let nonce2 = vpn_crypto::vpn_gen_nonce()
+    runner_assert_eq(r, len(nonce1), 24, "Nonce should be 24 hex characters (12 bytes)")
+    runner_assert_eq(r, nonce1 != nonce2, true, "Successive nonces should be distinct")
+
+    # 3. Encryption & Decryption roundtrip
+    let original_payload = "CONNECT gateway.discord.gg:443 HTTP/1.1\r\nHost: gateway.discord.gg\r\n\r\n"
+    let cipher, tag, err = vpn_crypto::vpn_encrypt(key, nonce1, original_payload)
+    runner_assert_eq(r, err, 0, "Encryption status should be 0 (success)")
+    runner_assert_eq(r, len(tag), 32, "Tag should be 32 hex characters (16 bytes)")
+    runner_assert_eq(r, len(cipher), len(original_payload) * 2, "Cipher should be 2x payload length")
+
+    let decrypted = vpn_crypto::vpn_decrypt(key, nonce1, cipher, tag)
+    runner_assert_str_eq(r, decrypted, original_payload, "Decrypted text must match original payload")
+
+    # 4. Tamper detection (Poly1305 MAC failure)
+    let tampered_cipher = "f" + cipher.substring(1)
+
+    let tampered_res = vpn_crypto::vpn_decrypt(key, nonce1, tampered_cipher, tag)
+    runner_assert_eq(r, tampered_res, null, "Tampered ciphertext must fail authentication and return null")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

@@ -1,0 +1,290 @@
+# Alya VPN - Client Local SOCKS5 Proxy & Split Tunnel Engine
+# Intercepts outgoing application traffic, detects owning process, and routes traffic via VPN tunnel or local direct network
+
+import "std/net" as net
+import "./resolver.alya" as resolver
+import "./router.alya" as router
+import "../common/crypto.alya" as crypto
+import "../common/protocol.alya" as proto
+
+# Reads SOCKS5 target host and port from client request
+function parse_socks5_request(client_sock)
+    # SOCKS5 greeting: client sends [0x05, NMETHODS, METHODS...]
+    let greet = net::tcp_recv(client_sock, 256)
+    if len(greet) < 2
+        return null
+    end
+    if ord(char_at(greet, 0)) != 5
+        return null # Not SOCKS5
+    end
+
+    # Respond: [0x05, 0x00] (No authentication required)
+    let greet_resp = chr(5) + chr(0)
+    net::tcp_send(client_sock, greet_resp)
+
+    # SOCKS5 connection request: [VER(1), CMD(1), RSV(1), ATYP(1), DST.ADDR, DST.PORT(2)]
+    let req = net::tcp_recv(client_sock, 512)
+    let rlen = len(req)
+    if rlen < 7
+        return null
+    end
+
+    let cmd = ord(char_at(req, 1))
+    if cmd != 1 # 1 = CONNECT
+        # Command not supported
+        let fail_resp = chr(5) + chr(7) + chr(0) + chr(1) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0)
+        net::tcp_send(client_sock, fail_resp)
+        return null
+    end
+
+    let atyp = ord(char_at(req, 3))
+    let target_host = ""
+    let target_port = 0
+
+    if atyp == 1 # IPv4 (4 bytes)
+        if rlen < 10
+            return null
+        end
+        let b0 = ord(char_at(req, 4))
+        let b1 = ord(char_at(req, 5))
+        let b2 = ord(char_at(req, 6))
+        let b3 = ord(char_at(req, 7))
+        target_host = "" + b0 + "." + b1 + "." + b2 + "." + b3
+
+        let p_hi = ord(char_at(req, 8))
+        let p_lo = ord(char_at(req, 9))
+        target_port = (p_hi * 256) + p_lo
+    else if atyp == 3 # Domain name (1 byte length + domain)
+        let domain_len = ord(char_at(req, 4))
+        if rlen < 5 + domain_len + 2
+            return null
+        end
+        target_host = req.substring(5, domain_len)
+        let p_hi = ord(char_at(req, 5 + domain_len))
+        let p_lo = ord(char_at(req, 5 + domain_len + 1))
+        target_port = (p_hi * 256) + p_lo
+    else
+        # IPv6 or unsupported
+        return null
+    end
+
+    # Success response: [0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00]
+    let ok_resp = chr(5) + chr(0) + chr(0) + chr(1) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0)
+    net::tcp_send(client_sock, ok_resp)
+
+    return {
+        "host": target_host,
+        "port": target_port
+    }
+end
+
+# Starts the local SOCKS5 proxy and routes traffic according to split-tunneling configuration
+function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps)
+    let session_key = crypto::vpn_derive_key(passphrase)
+
+    let proxy_sock = net::tcp_listen(local_port, 32)
+    if proxy_sock < 0
+        say("[ERROR] Failed to start local SOCKS5 proxy on port " + local_port)
+        return 1
+    end
+
+    let mode_str = "ALL TRAFFIC"
+    if split_mode == 1
+        mode_str = "WHITELIST (Only listed apps)"
+    else if split_mode == 2
+        mode_str = "BLACKLIST (Listed apps bypass VPN)"
+    end
+
+    say("[INFO] ========================================")
+    say("[INFO] Alya VPN Client Active")
+    say("[INFO] Local SOCKS5 Proxy: 127.0.0.1:" + local_port)
+    say("[INFO] Remote VPN Server:  " + server_host + ":" + server_port)
+    say("[INFO] Split Tunnel Mode:  " + mode_str)
+    say("[INFO] Rules: " + len(split_apps) + " application(s) configured")
+    say("[INFO] ========================================")
+
+    let next_channel_id = 1
+
+    while 1
+        let poll_res = net::tcp_poll(proxy_sock, 100)
+        if poll_res == 1
+            let app_sock = net::tcp_accept(proxy_sock)
+            if app_sock >= 0
+                let peer_port = net::tcp_peer_port(app_sock)
+                let proc_name = resolver::resolve_tcp_process(peer_port)
+                if len(proc_name) == 0
+                    proc_name = "unknown"
+                end
+
+                let req = parse_socks5_request(app_sock)
+                if req != null
+                    let host = req["host"]
+                    let port = req["port"]
+                    let route_vpn = router::should_route_through_vpn(split_mode, split_apps, proc_name)
+
+                    if route_vpn == 1
+                        say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Routing via VPN Server)")
+                        vpn_relay_via_tunnel(app_sock, next_channel_id, server_host, server_port, session_key, host, port)
+                    else
+                        say("[DIRECT] [" + proc_name + "] -> " + host + ":" + port + " (Bypassing VPN, Direct Connection)")
+                        vpn_relay_direct(app_sock, host, port)
+                    end
+                    next_channel_id += 1
+                else
+                    net::tcp_close(app_sock)
+                end
+            end
+        end
+    end
+
+    net::tcp_close(proxy_sock)
+    return 0
+end
+
+# Relays traffic directly to destination (Bypass VPN)
+function vpn_relay_direct(app_sock, host, port)
+    let dest_sock = net::tcp_connect(host, port)
+    if dest_sock < 0
+        say("[DIRECT] Failed to connect directly to " + host + ":" + port)
+        net::tcp_close(app_sock)
+        return 0
+    end
+
+    let active = 1
+    while active == 1
+        # App -> Dest
+        if net::tcp_poll(app_sock, 5) == 1
+            let data = net::tcp_recv(app_sock, 4096)
+            if len(data) == 0
+                active = 0
+                break
+            end
+            net::tcp_send(dest_sock, data)
+        end
+
+        # Dest -> App
+        if net::tcp_poll(dest_sock, 5) == 1
+            let data = net::tcp_recv(dest_sock, 4096)
+            if len(data) == 0
+                active = 0
+                break
+            end
+            net::tcp_send(app_sock, data)
+        end
+    end
+
+    net::tcp_close(dest_sock)
+    net::tcp_close(app_sock)
+    return 1
+end
+
+# Relays traffic encrypted through VPN server tunnel
+function vpn_relay_via_tunnel(app_sock, channel_id, server_host, server_port, session_key, target_host, target_port)
+    let vpn_sock = net::tcp_connect(server_host, server_port)
+    if vpn_sock < 0
+        say("[ERROR] Failed to connect to VPN server " + server_host + ":" + server_port)
+        net::tcp_close(app_sock)
+        return 0
+    end
+
+    # 1. Send CONNECT_REQ frame
+    let req_payload = proto::pack_connect_req_payload(channel_id, proto::proto_tcp(), target_host, target_port)
+    let req_frame = proto::pack_frame(session_key, proto::msg_connect_req(), req_payload)
+    if req_frame == null
+        net::tcp_close(vpn_sock)
+        net::tcp_close(app_sock)
+        return 0
+    end
+    net::tcp_send(vpn_sock, req_frame)
+
+    # 2. Wait for CONNECT_RESP
+    let connected = 0
+    let vpn_buffer = ""
+    let wait_count = 0
+    while wait_count < 50 and connected == 0 # 5 seconds max
+        if net::tcp_poll(vpn_sock, 100) == 1
+            let chunk = net::tcp_recv(vpn_sock, 4096)
+            vpn_buffer += chunk
+            let nl = proto::find_char(vpn_buffer, "\n")
+            if nl >= 0
+                let line = vpn_buffer.substring(0, nl)
+                vpn_buffer = vpn_buffer.substring(nl + 1)
+                let msg_type, payload = proto::unpack_frame(session_key, line)
+                if msg_type == proto::msg_connect_resp() and payload != null
+                    let resp = proto::unpack_connect_resp_payload(payload)
+                    if resp != null and resp["status"] == proto::status_ok()
+                        connected = 1
+                        break
+                    end
+                end
+            end
+        end
+        wait_count += 1
+    end
+
+    if connected == 0
+        say("[ERROR] VPN server could not establish connection to " + target_host + ":" + target_port)
+        net::tcp_close(vpn_sock)
+        net::tcp_close(app_sock)
+        return 0
+    end
+
+    # 3. Bidirectional Relay: App <-> Encrypted VPN Tunnel
+    let active = 1
+    while active == 1
+        # From App -> Encrypt -> Send to VPN Server
+        if net::tcp_poll(app_sock, 5) == 1
+            let app_data = net::tcp_recv(app_sock, 4096)
+            if len(app_data) == 0
+                # App closed socket
+                let close_frame = proto::pack_frame(session_key, proto::msg_close(), "" + channel_id)
+                if close_frame != null
+                    net::tcp_send(vpn_sock, close_frame)
+                end
+                active = 0
+                break
+            end
+
+            let data_payload = proto::pack_data_payload(channel_id, app_data)
+            let frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
+            if frame != null
+                net::tcp_send(vpn_sock, frame)
+            end
+        end
+
+        # From VPN Server -> Decrypt -> Send to App
+        if net::tcp_poll(vpn_sock, 5) == 1
+            let chunk = net::tcp_recv(vpn_sock, 4096)
+            if len(chunk) == 0
+                active = 0
+                break
+            end
+            vpn_buffer += chunk
+
+            while 1
+                let nl = proto::find_char(vpn_buffer, "\n")
+                if nl < 0
+                    break
+                end
+
+                let line = vpn_buffer.substring(0, nl)
+                vpn_buffer = vpn_buffer.substring(nl + 1)
+
+                let msg_type, payload = proto::unpack_frame(session_key, line)
+                if msg_type == proto::msg_data() and payload != null
+                    let data_pkg = proto::unpack_data_payload(payload)
+                    if data_pkg != null
+                        net::tcp_send(app_sock, data_pkg["data"])
+                    end
+                else if msg_type == proto::msg_close()
+                    active = 0
+                    break
+                end
+            end
+        end
+    end
+
+    net::tcp_close(vpn_sock)
+    net::tcp_close(app_sock)
+    return 1
+end

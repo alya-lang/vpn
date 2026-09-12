@@ -1,0 +1,53 @@
+# Alya VPN - Process Resolver
+# Maps local client socket ports to process executable names using OS-level network tables
+
+import "../ffi.alya"
+import "../common/crypto.alya" as crypto
+
+# Resolves TCP local port to process name (e.g. "Discord.exe", "chrome.exe")
+# Returns lowercase process name, or empty string if not found or system process
+function resolve_tcp_process(local_port)
+    let buf = "" + crypto::alloc_str(260)
+    let res = alya_vpn_get_process_by_port(local_port, buf, 256)
+    if res == 0
+        return ""
+    end
+
+    # Read until null terminator
+    let name = ""
+    let slen = len(buf)
+    let i = 0
+    while i < slen
+        let ch = char_at(buf, i)
+        if ord(ch) == 0
+            break
+        end
+        name += ch
+        i += 1
+    end
+
+    return lower(name)
+end
+
+# Resolves UDP local port to process name
+function resolve_udp_process(local_port)
+    let buf = "" + crypto::alloc_str(260)
+    let res = alya_vpn_get_udp_process_by_port(local_port, buf, 256)
+    if res == 0
+        return ""
+    end
+
+    let name = ""
+    let slen = len(buf)
+    let i = 0
+    while i < slen
+        let ch = char_at(buf, i)
+        if ord(ch) == 0
+            break
+        end
+        name += ch
+        i += 1
+    end
+
+    return lower(name)
+end

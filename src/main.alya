@@ -1,0 +1,190 @@
+# Alya VPN - Next-Gen Split-Tunneling Encrypted VPN
+# CLI Entry point supporting Server, Client (SOCKS5 + Split Tunneling), and Diagnostic commands
+
+import "./server/forwarder.alya" as server
+import "./client/local_proxy.alya" as client
+import "./client/resolver.alya" as resolver
+import "./client/router.alya" as router
+import "./common/crypto.alya" as crypto
+import "./common/protocol.alya" as proto
+
+function print_banner()
+    say("=================================================================")
+    say("           A L Y A   V P N   T U N N E L   (v0.1.0)              ")
+    say("   High-Performance ChaCha20-Poly1305 Split-Tunneling Network    ")
+    say("=================================================================")
+end
+
+function print_usage()
+    print_banner()
+    say("Usage: alyac run src/main.alya -- <command> [options]\n")
+    say("Commands:")
+    say("  server                      Start the remote VPN tunnel server")
+    say("    --port <port>             Listen port (default: 51820)")
+    say("    --pass <secret>           Shared passphrase for AEAD encryption\n")
+    say("  client                      Start the local client SOCKS5 proxy")
+    say("    --server <host>           Remote VPN server host (default: 127.0.0.1)")
+    say("    --port <port>             Remote VPN server port (default: 51820)")
+    say("    --proxy <port>            Local SOCKS5 proxy port (default: 1080)")
+    say("    --pass <secret>           Shared passphrase for AEAD encryption")
+    say("    --mode <all|inc|exc>      Split-tunnel mode:")
+    say("                                all: Route everything via VPN")
+    say("                                inc: ONLY listed apps use VPN")
+    say("                                exc: Listed apps BYPASS VPN (default)")
+    say("    --apps <a,b,c>            Comma-separated app names or patterns")
+    say("                              e.g. 'discord,steamwebhelper.exe,*torrent*'\n")
+    say("  check-port <port>           Diagnostic: inspect process owning local port")
+    say("  benchmark                   Run ChaCha20-Poly1305 encryption benchmark\n")
+end
+
+function main()
+    let args_list = args()
+    if len(args_list) < 1
+        print_usage()
+        return 0
+    end
+
+    let cmd = args_list[0]
+
+    # --- COMMAND: SERVER ---
+    if cmd == "server"
+        let port = 51820
+        let pass = "alya_vpn_secret_2026"
+
+        let i = 1
+        while i < len(args_list)
+            if args_list[i] == "--port" and i + 1 < len(args_list)
+                port = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--pass" and i + 1 < len(args_list)
+                pass = args_list[i + 1]
+                i += 2
+            else
+                i += 1
+            end
+        end
+
+        print_banner()
+        server::vpn_run_server(port, pass)
+        return 0
+    end
+
+    # --- COMMAND: CLIENT ---
+    if cmd == "client"
+        let srv_host = "127.0.0.1"
+        let srv_port = 51820
+        let proxy_port = 1080
+        let pass = "alya_vpn_secret_2026"
+        let split_mode = router::mode_exclude() # Default blacklist
+        let app_list = ["discord", "Discord.exe"]
+
+        let i = 1
+        while i < len(args_list)
+            if args_list[i] == "--server" and i + 1 < len(args_list)
+                srv_host = args_list[i + 1]
+                i += 2
+            else if args_list[i] == "--port" and i + 1 < len(args_list)
+                srv_port = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--proxy" and i + 1 < len(args_list)
+                proxy_port = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--pass" and i + 1 < len(args_list)
+                pass = args_list[i + 1]
+                i += 2
+            else if args_list[i] == "--mode" and i + 1 < len(args_list)
+                let m = lower(args_list[i + 1])
+                if m == "all"
+                    split_mode = router::mode_all()
+                else if m == "inc" or m == "include"
+                    split_mode = router::mode_include()
+                else if m == "exc" or m == "exclude"
+                    split_mode = router::mode_exclude()
+                end
+                i += 2
+            else if args_list[i] == "--apps" and i + 1 < len(args_list)
+                app_list = proto::split_string(args_list[i + 1], ",")
+                i += 2
+            else
+                i += 1
+            end
+        end
+
+        print_banner()
+        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list)
+        return 0
+    end
+
+    # --- COMMAND: CHECK PORT ---
+    if cmd == "check-port"
+        if len(args_list) < 2
+            say("Usage: alyac run src/main.alya -- check-port <port_number>")
+            return 1
+        end
+        let target_port = proto::parse_number(args_list[1])
+        say("Inspecting owner process for port " + target_port + "...")
+        let proc_tcp = resolver::resolve_tcp_process(target_port)
+        let proc_udp = resolver::resolve_udp_process(target_port)
+
+        if len(proc_tcp) > 0
+            say("  [TCP] Port " + target_port + " is owned by: " + proc_tcp)
+        else
+            say("  [TCP] No active TCP socket found on port " + target_port)
+        end
+
+        if len(proc_udp) > 0
+            say("  [UDP] Port " + target_port + " is owned by: " + proc_udp)
+        else
+            say("  [UDP] No active UDP socket found on port " + target_port)
+        end
+        return 0
+    end
+
+    # --- COMMAND: BENCHMARK ---
+    if cmd == "benchmark"
+        print_banner()
+        say("[BENCH] Initializing 256-bit ChaCha20-Poly1305 throughput test...")
+        let key = crypto::vpn_derive_key("bench_secret_key_123456789")
+        let nonce = crypto::vpn_gen_nonce()
+        let chunk = "The quick brown fox jumps over the lazy dog! 1234567890\r\n"
+        let payload = ""
+        let count = 0
+        while count < 200 # ~11 KB payload
+            payload += chunk
+            count += 1
+        end
+
+        let iters = 500
+        say("[BENCH] Encrypting " + len(payload) + " bytes x " + iters + " iterations...")
+
+        let i = 0
+        while i < iters
+            let cipher, tag, err = crypto::vpn_encrypt(key, nonce, payload)
+            if err != 0
+                say("[BENCH] Error during iteration " + i)
+                return 1
+            end
+            i += 1
+        end
+
+        say("[BENCH] Decrypting and authenticating Poly1305 MAC tag x " + iters + " iterations...")
+        let cipher, tag, err = crypto::vpn_encrypt(key, nonce, payload)
+        let j = 0
+        while j < iters
+            let plain = crypto::vpn_decrypt(key, nonce, cipher, tag)
+            if plain == null
+                say("[BENCH] Verification error at iteration " + j)
+                return 1
+            end
+            j += 1
+        end
+
+        say("[BENCH] 500 AEAD roundtrips completed successfully with 100% integrity!")
+        return 0
+    end
+
+    print_usage()
+    return 0
+end
+
+main()

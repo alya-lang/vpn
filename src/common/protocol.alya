@@ -1,0 +1,242 @@
+# Alya VPN - Protocol Specification and Frame Serialization
+# Pure Alya implementation without external dependencies
+
+import "./crypto.alya" as crypto
+
+# Message Types
+function msg_handshake_req() return 1 end
+function msg_handshake_resp() return 2 end
+function msg_connect_req() return 3 end
+function msg_connect_resp() return 4 end
+function msg_data() return 5 end
+function msg_close() return 6 end
+function msg_ping() return 7 end
+function msg_pong() return 8 end
+
+# Transport Protocols
+function proto_tcp() return 1 end
+function proto_udp() return 2 end
+
+# Status Codes
+function status_ok() return 0 end
+function status_auth_failed() return 1 end
+function status_connect_failed() return 2 end
+function status_error() return 3 end
+
+# Splits string by single character delimiter
+function split_string(s, delim)
+    let res = []
+    let slen = len(s)
+    let current = ""
+    let i = 0
+    while i < slen
+        let ch = char_at(s, i)
+        if ch == delim
+            res.push(current)
+            current = ""
+        else
+            current += ch
+        end
+        i += 1
+    end
+    res.push(current)
+    return res
+end
+
+# Finds index of substring
+function find_char(s, target_ch)
+    let slen = len(s)
+    let i = 0
+    while i < slen
+        if char_at(s, i) == target_ch
+            return i
+        end
+        i += 1
+    end
+    return -1
+end
+
+# Parses string to integer (supports basic positive decimal)
+function parse_number(s)
+    let slen = len(s)
+    if slen == 0
+        return 0
+    end
+    let res = 0
+    let i = 0
+    while i < slen
+        let c = ord(char_at(s, i))
+        if c >= 48 and c <= 57
+            res = (res * 10) + (c - 48)
+        end
+        i += 1
+    end
+    return res
+end
+
+# Converts 1 hex character to 0..15
+function hex_char_val(ch)
+    let c = ord(ch)
+    if c >= 48 and c <= 57
+        return c - 48
+    end
+    if c >= 97 and c <= 102
+        return c - 87
+    end
+    if c >= 65 and c <= 70
+        return c - 55
+    end
+    return 0
+end
+
+# Converts 2 hex characters to byte (0..255)
+function hex_to_byte(h)
+    if len(h) < 2
+        return 0
+    end
+    return (hex_char_val(char_at(h, 0)) * 16) + hex_char_val(char_at(h, 1))
+end
+
+# Converts byte (0..255) to 2-digit hex string
+function byte_to_hex(b)
+    let hex_chars = "0123456789abcdef"
+    let hi = (b / 16) % 16
+    let lo = b % 16
+    return substring(hex_chars, hi, 1) + substring(hex_chars, lo, 1)
+end
+
+# Serializes CONNECT_REQ payload: "channel_id|proto|host|port"
+function pack_connect_req_payload(channel_id, proto, target_host, target_port)
+    return "" + channel_id + "|" + proto + "|" + target_host + "|" + target_port
+end
+
+# Parses CONNECT_REQ payload
+function unpack_connect_req_payload(payload)
+    let parts = split_string(payload, "|")
+    if len(parts) < 4
+        return null
+    end
+    return {
+        "channel_id": parse_number(parts[0]),
+        "proto": parse_number(parts[1]),
+        "target_host": parts[2],
+        "target_port": parse_number(parts[3])
+    }
+end
+
+# Serializes CONNECT_RESP payload: "channel_id|status|message"
+function pack_connect_resp_payload(channel_id, status, message)
+    return "" + channel_id + "|" + status + "|" + message
+end
+
+# Parses CONNECT_RESP payload
+function unpack_connect_resp_payload(payload)
+    let parts = split_string(payload, "|")
+    if len(parts) < 2
+        return null
+    end
+    let msg = if len(parts) >= 3 then parts[2] else ""
+    return {
+        "channel_id": parse_number(parts[0]),
+        "status": parse_number(parts[1]),
+        "message": msg
+    }
+end
+
+# Serializes DATA payload: "channel_id|data"
+function pack_data_payload(channel_id, raw_data)
+    return "" + channel_id + "|" + raw_data
+end
+
+# Parses DATA payload
+function unpack_data_payload(payload)
+    let idx = find_char(payload, "|")
+    if idx < 0
+        return null
+    end
+    let ch_str = payload.substring(0, idx)
+    let data_str = payload.substring(idx + 1)
+    return {
+        "channel_id": parse_number(ch_str),
+        "data": data_str
+    }
+end
+
+# Serializes CLOSE payload: "channel_id|reason"
+function pack_close_payload(channel_id, reason)
+    return "" + channel_id + "|" + reason
+end
+
+# Parses CLOSE payload
+function unpack_close_payload(payload)
+    let parts = split_string(payload, "|")
+    if len(parts) < 1
+        return null
+    end
+    let reason = if len(parts) >= 2 then parse_number(parts[1]) else 0
+    return {
+        "channel_id": parse_number(parts[0]),
+        "reason": reason
+    }
+end
+
+
+# Packs an authenticated and encrypted envelope frame
+# Envelope structure:
+# [Magic: 2 chars "AV"] [Version: 2 hex "01"] [Type: 2 hex] [Nonce: 24 hex] [Tag: 32 hex] [Cipher_Hex: N*2 chars] \n
+function pack_frame(session_key, msg_type, plaintext_payload)
+    let type_hex = byte_to_hex(msg_type)
+    let nonce = crypto::vpn_gen_nonce()
+    let cipher, tag, err = crypto::vpn_encrypt(session_key, nonce, plaintext_payload)
+    if err != 0
+        return null
+    end
+
+    let frame = "AV01" + type_hex + nonce + tag + cipher + "\n"
+    return frame
+end
+
+# Unpacks and authenticates an incoming frame
+# Returns tuple: msg_type, plaintext (or null, null on failure)
+function unpack_frame(session_key, frame_line)
+    let flen = len(frame_line)
+    # Strip trailing newline if present
+    let s = frame_line
+    if flen > 0 and char_at(s, flen - 1) == "\n"
+        s = s.substring(0, flen - 1)
+        flen = len(s)
+    end
+    if flen > 0 and char_at(s, flen - 1) == "\r"
+        s = s.substring(0, flen - 1)
+        flen = len(s)
+    end
+
+    # Header: "AV" (2) + "01" (2) + Type (2) + Nonce (24) + Tag (32) = 62 characters min
+    if flen < 62
+        return 0, null
+    end
+
+    let magic = s.substring(0, 2)
+    if magic != "AV"
+        return 0, null
+    end
+
+    let ver = s.substring(2, 2)
+    if ver != "01"
+        return 0, null
+    end
+
+    let type_hex = s.substring(4, 2)
+    let msg_type = hex_to_byte(type_hex)
+    let nonce = s.substring(6, 24)
+    let tag = s.substring(30, 32)
+    let cipher = s.substring(62, flen - 62)
+
+    let plain = crypto::vpn_decrypt(session_key, nonce, cipher, tag)
+    if plain == null
+        return 0, null # Authentication or integrity failure
+    end
+
+    return msg_type, plain
+end
+

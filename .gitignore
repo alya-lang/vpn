@@ -1,0 +1,17 @@
+# Temporary and build artifacts
+*.o
+*.obj
+*.s
+*.a
+*.lib
+*.dll
+*.exe
+*.so
+*.dylib
+temp_*
+build/
+bin/
+target/
+.alya/
+.DS_Store
+Thumbs.db
