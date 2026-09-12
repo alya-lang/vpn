@@ -42,7 +42,7 @@ function main()
     let client_data = "TLS_CLIENT_HELLO_DATA_PAYLOAD_FOR_DISCORD"
     let client_d_payload = proto::pack_data_payload(ch_id, client_data)
     let client_frame = proto::pack_frame(key, proto::msg_data(), client_d_payload)
-    
+
     let server_msg_type, server_payload = proto::unpack_frame(key, client_frame)
     runner_assert_eq(r, server_msg_type, proto::msg_data(), "Server validated data message type")
     let server_unpacked_data = proto::unpack_data_payload(server_payload)

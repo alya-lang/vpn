@@ -180,7 +180,6 @@ function unpack_close_payload(payload)
     }
 end
 
-
 # Packs an authenticated and encrypted envelope frame
 # Envelope structure:
 # [Magic: 2 chars "AV"] [Version: 2 hex "01"] [Type: 2 hex] [Nonce: 24 hex] [Tag: 32 hex] [Cipher_Hex: N*2 chars] \n
@@ -239,4 +238,3 @@ function unpack_frame(session_key, frame_line)
 
     return msg_type, plain
 end
-
