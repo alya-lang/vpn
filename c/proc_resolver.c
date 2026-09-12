@@ -186,6 +186,13 @@ int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len
 #elif defined(__linux__)
 #include <dirent.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#ifndef SOCKET
+#define SOCKET int
+#endif
 
 static int get_socket_inode(const char *net_file, int local_port) {
     FILE *f = fopen(net_file, "r");
@@ -289,3 +296,94 @@ int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len
 }
 
 #endif
+
+int alya_vpn_socks5_handshake(int client_sock, char *out_host, int max_host_len) {
+    if (!out_host || max_host_len < 16) return -1;
+
+    // 1. SOCKS5 Greeting: [0x05, NMETHODS, METHODS...]
+    unsigned char greet[256];
+    int n = recv((SOCKET)client_sock, (char *)greet, sizeof(greet), 0);
+    if (n < 2 || greet[0] != 0x05) {
+        return -1;
+    }
+
+    // Respond: [0x05, 0x00] (No auth required)
+    const unsigned char greet_resp[2] = {0x05, 0x00};
+    if (send((SOCKET)client_sock, (const char *)greet_resp, 2, 0) != 2) {
+        return -1;
+    }
+
+    // 2. SOCKS5 Request: [0x05, CMD(1), RSV(0), ATYP(1), DST.ADDR, DST.PORT(2)]
+    unsigned char req[512];
+    n = recv((SOCKET)client_sock, (char *)req, sizeof(req), 0);
+    if (n < 7 || req[0] != 0x05 || req[1] != 0x01) {
+        const unsigned char fail_resp[10] = {0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+        send((SOCKET)client_sock, (const char *)fail_resp, 10, 0);
+        return -1;
+    }
+
+    int atyp = req[3];
+    int target_port = 0;
+
+    if (atyp == 1) { // IPv4 (4 bytes)
+        if (n < 10) return -1;
+        snprintf(out_host, (size_t)max_host_len, "%u.%u.%u.%u", req[4], req[5], req[6], req[7]);
+        target_port = (req[8] << 8) | req[9];
+    } else if (atyp == 3) { // Domain name (1 byte length + string)
+        int domain_len = req[4];
+        if (n < 5 + domain_len + 2 || domain_len >= max_host_len) return -1;
+        memcpy(out_host, &req[5], (size_t)domain_len);
+        out_host[domain_len] = '\0';
+        target_port = (req[5 + domain_len] << 8) | req[5 + domain_len + 1];
+    } else if (atyp == 4) { // IPv6 (16 bytes)
+        if (n < 22) return -1;
+        inet_ntop(AF_INET6, &req[4], out_host, (socklen_t)max_host_len);
+        target_port = (req[20] << 8) | req[21];
+    } else {
+        const unsigned char fail_resp[10] = {0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+        send((SOCKET)client_sock, (const char *)fail_resp, 10, 0);
+        return -1;
+    }
+
+    // Respond success: [0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x10, 0x00]
+    const unsigned char ok_resp[10] = {0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x10, 0x00};
+    send((SOCKET)client_sock, (const char *)ok_resp, 10, 0);
+
+    return target_port;
+}
+
+int alya_vpn_sock_recv_hex(int sock, char *out_hex, int max_bytes) {
+    if (!out_hex || max_bytes <= 0) return 0;
+    unsigned char buf[8192];
+    int to_read = max_bytes > (int)sizeof(buf) ? (int)sizeof(buf) : max_bytes;
+    int n = recv((SOCKET)sock, (char *)buf, to_read, 0);
+    if (n <= 0) {
+        out_hex[0] = '\0';
+        return n;
+    }
+
+    static const char hex_chars[] = "0123456789abcdef";
+    for (int i = 0; i < n; ++i) {
+        out_hex[i * 2] = hex_chars[(buf[i] >> 4) & 0x0F];
+        out_hex[i * 2 + 1] = hex_chars[buf[i] & 0x0F];
+    }
+    out_hex[n * 2] = '\0';
+    return n;
+}
+
+int alya_vpn_sock_send_hex(int sock, const char *hex_str, int hex_len) {
+    if (!hex_str || hex_len <= 0 || hex_len % 2 != 0) return 0;
+    int byte_len = hex_len / 2;
+    unsigned char buf[8192];
+    if (byte_len > (int)sizeof(buf)) byte_len = (int)sizeof(buf);
+
+    for (int i = 0; i < byte_len; ++i) {
+        int hi = hex_str[i * 2];
+        int lo = hex_str[i * 2 + 1];
+        int v_hi = (hi >= '0' && hi <= '9') ? hi - '0' : (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10 : (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10 : 0;
+        int v_lo = (lo >= '0' && lo <= '9') ? lo - '0' : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10 : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10 : 0;
+        buf[i] = (unsigned char)((v_hi << 4) | v_lo);
+    }
+    return send((SOCKET)sock, (const char *)buf, byte_len, 0);
+}
+

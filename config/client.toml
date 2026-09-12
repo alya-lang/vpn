@@ -1,7 +1,7 @@
 # Alya VPN - Client Configuration
 [client]
 server_host = "127.0.0.1"
-server_port = 51820
+server_port = 51821
 local_proxy_port = 1080
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"

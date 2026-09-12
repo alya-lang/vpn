@@ -6,79 +6,29 @@ import "./resolver.alya" as resolver
 import "./router.alya" as router
 import "../common/crypto.alya" as crypto
 import "../common/protocol.alya" as proto
+import "../ffi.alya"
 
 # Reads SOCKS5 target host and port from client request
 function parse_socks5_request(client_sock)
-    # SOCKS5 greeting: client sends [0x05, NMETHODS, METHODS...]
-    if net::tcp_poll(client_sock, 2000) <= 0
-        return 0, "", 0
-    end
-    let greet = net::tcp_recv(client_sock, 256)
-    if len(greet) < 2
-        return 0, "", 0
-    end
-    if ord(char_at(greet, 0)) != 5
-        return 0, "", 0 # Not SOCKS5
-    end
-
-    # Respond: [0x05, 0x00] (No authentication required)
-    let greet_resp = chr(5) + chr(0)
-    net::tcp_send(client_sock, greet_resp)
-
-    # SOCKS5 connection request: [VER(1), CMD(1), RSV(1), ATYP(1), DST.ADDR, DST.PORT(2)]
-    if net::tcp_poll(client_sock, 2000) <= 0
-        return 0, "", 0
-    end
-    let req = net::tcp_recv(client_sock, 512)
-    let rlen = len(req)
-    if rlen < 7
+    let host_buf = "" + crypto::alloc_str(260)
+    let port = alya_vpn_socks5_handshake(client_sock, host_buf, 256)
+    if port <= 0 or port >= 65536
         return 0, "", 0
     end
 
-    let cmd = ord(char_at(req, 1))
-    if cmd != 1 # 1 = CONNECT
-        # Command not supported
-        let fail_resp = chr(5) + chr(7) + chr(0) + chr(1) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0)
-        net::tcp_send(client_sock, fail_resp)
-        return 0, "", 0
-    end
-
-    let atyp = ord(char_at(req, 3))
-    let target_host = ""
-    let target_port = 0
-
-    if atyp == 1 # IPv4 (4 bytes)
-        if rlen < 10
-            return 0, "", 0
+    let host = ""
+    let slen = len(host_buf)
+    let i = 0
+    while i < slen
+        let ch = char_at(host_buf, i)
+        if ord(ch) == 0
+            break
         end
-        let b0 = ord(char_at(req, 4))
-        let b1 = ord(char_at(req, 5))
-        let b2 = ord(char_at(req, 6))
-        let b3 = ord(char_at(req, 7))
-        target_host = "" + b0 + "." + b1 + "." + b2 + "." + b3
-
-        let p_hi = ord(char_at(req, 8))
-        let p_lo = ord(char_at(req, 9))
-        target_port = (p_hi * 256) + p_lo
-    else if atyp == 3 # Domain name (1 byte length + domain)
-        let domain_len = ord(char_at(req, 4))
-        if rlen < 5 + domain_len + 2
-            return 0, "", 0
-        end
-        target_host = req.substring(5, domain_len)
-        let p_hi = ord(char_at(req, 5 + domain_len))
-        let p_lo = ord(char_at(req, 5 + domain_len + 1))
-        target_port = (p_hi * 256) + p_lo
-    else
-        # IPv6 or unsupported
-        return 0, "", 0
+        host += ch
+        i += 1
     end
 
-    # Success response: [0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00]
-    let ok_resp = chr(5) + chr(0) + chr(0) + chr(1) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0) + chr(0)
-    net::tcp_send(client_sock, ok_resp)
-
-    return 1, target_host, target_port
+    return 1, host, port
 end
 
 # Starts the local SOCKS5 proxy and routes traffic according to split-tunneling configuration

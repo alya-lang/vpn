@@ -8,4 +8,7 @@ extern "C"
     function alya_vpn_decrypt(key_hex: str, nonce_hex: str, cipher_hex: str, cipher_len: i32, tag_hex: str, out_plain: ptr) -> i32
     function alya_vpn_get_process_by_port(local_port: i32, out_name: ptr, max_len: i32) -> i32
     function alya_vpn_get_udp_process_by_port(local_port: i32, out_name: ptr, max_len: i32) -> i32
+    function alya_vpn_socks5_handshake(client_sock: i32, out_host: ptr, max_host_len: i32) -> i32
+    function alya_vpn_sock_recv_hex(sock: i32, out_hex: ptr, max_bytes: i32) -> i32
+    function alya_vpn_sock_send_hex(sock: i32, hex_str: str, hex_len: i32) -> i32
 end

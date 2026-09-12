@@ -20,11 +20,11 @@ function print_usage()
     say("Usage: alyac run src/main.alya -- <command> [options]\n")
     say("Commands:")
     say("  server                      Start the remote VPN tunnel server")
-    say("    --port <port>             Listen port (default: 51820)")
+    say("    --port <port>             Listen port (default: 51821)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption\n")
     say("  client                      Start the local client SOCKS5 proxy")
     say("    --server <host>           Remote VPN server host (default: 127.0.0.1)")
-    say("    --port <port>             Remote VPN server port (default: 51820)")
+    say("    --port <port>             Remote VPN server port (default: 51821)")
     say("    --proxy <port>            Local SOCKS5 proxy port (default: 1080)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
     say("    --mode <all|inc|exc>      Split-tunnel mode:")
@@ -61,7 +61,7 @@ function load_client_config(config_path)
     let lines = proto::split_string(content, "\n")
     let cfg = {
         "server_host": "127.0.0.1",
-        "server_port": 51820,
+        "server_port": 51821,
         "local_port": 1080,
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "mode": "exclude",
@@ -124,7 +124,7 @@ function main()
 
     # --- COMMAND: SERVER ---
     if cmd == "server"
-        let port = 51820
+        let port = 51821
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
 
         let i = 1
@@ -148,7 +148,7 @@ function main()
     # --- COMMAND: CLIENT ---
     if cmd == "client"
         let srv_host = "127.0.0.1"
-        let srv_port = 51820
+        let srv_port = 51821
         let proxy_port = 1080
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let split_mode = router::mode_exclude() # Default blacklist
