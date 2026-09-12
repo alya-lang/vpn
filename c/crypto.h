@@ -38,8 +38,21 @@ int alya_vpn_decrypt(
     char *out_plain
 );
 
+// High-speed native envelope pack: generates nonce, encrypts, MACs, and formats "AV01..." frame
+const char *alya_vpn_pack_frame(const char *key_hex, int msg_type, const char *payload, int payload_len);
+
+// High-speed native envelope unpack: parses header, verifies MAC, decrypts, returns plaintext or ""
+const char *alya_vpn_unpack_frame(const char *key_hex, const char *frame_line, int frame_len);
+
+// Returns message type of last successfully unpacked frame, or 0 on error
+int alya_vpn_unpack_frame_type(void);
+
+// Formats a DATA frame payload natively: "channel_id|hex_data"
+const char *alya_vpn_pack_data_payload(int channel_id, const char *hex_data);
+
 #ifdef __cplusplus
 }
 #endif
 
 #endif // ALYA_VPN_CRYPTO_H
+

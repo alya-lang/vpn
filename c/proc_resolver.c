@@ -4,6 +4,13 @@
 #include <string.h>
 #include <stdint.h>
 
+#if defined(__GNUC__) || defined(__clang__)
+static void __attribute__((constructor)) init_unbuffered_io(void) {
+    setvbuf(stdout, NULL, _IONBF, 0);
+    setvbuf(stderr, NULL, _IONBF, 0);
+}
+#endif
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
@@ -300,6 +307,18 @@ int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len
 int alya_vpn_socks5_handshake(int client_sock, char *out_host, int max_host_len) {
     if (!out_host || max_host_len < 16) return -1;
 
+#if defined(_WIN32)
+    DWORD tv = 3000;
+    setsockopt((SOCKET)client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+    setsockopt((SOCKET)client_sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
+#else
+    struct timeval tv;
+    tv.tv_sec = 3;
+    tv.tv_usec = 0;
+    setsockopt((SOCKET)client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+    setsockopt((SOCKET)client_sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
+#endif
+
     // 1. SOCKS5 Greeting: [0x05, NMETHODS, METHODS...]
     unsigned char greet[256];
     int n = recv((SOCKET)client_sock, (char *)greet, sizeof(greet), 0);
@@ -352,38 +371,52 @@ int alya_vpn_socks5_handshake(int client_sock, char *out_host, int max_host_len)
     return target_port;
 }
 
-int alya_vpn_sock_recv_hex(int sock, char *out_hex, int max_bytes) {
-    if (!out_hex || max_bytes <= 0) return 0;
+static char s_recv_hex_buf[65536];
+
+const char *alya_vpn_sock_recv_hex(int sock, int max_bytes) {
+    if (max_bytes <= 0 || max_bytes > 32768) max_bytes = 8192;
     unsigned char buf[8192];
     int to_read = max_bytes > (int)sizeof(buf) ? (int)sizeof(buf) : max_bytes;
     int n = recv((SOCKET)sock, (char *)buf, to_read, 0);
     if (n <= 0) {
-        out_hex[0] = '\0';
-        return n;
+        return "";
     }
 
     static const char hex_chars[] = "0123456789abcdef";
     for (int i = 0; i < n; ++i) {
-        out_hex[i * 2] = hex_chars[(buf[i] >> 4) & 0x0F];
-        out_hex[i * 2 + 1] = hex_chars[buf[i] & 0x0F];
+        s_recv_hex_buf[i * 2] = hex_chars[(buf[i] >> 4) & 0x0F];
+        s_recv_hex_buf[i * 2 + 1] = hex_chars[buf[i] & 0x0F];
     }
-    out_hex[n * 2] = '\0';
-    return n;
+    s_recv_hex_buf[n * 2] = '\0';
+    return s_recv_hex_buf;
 }
+
+
+#ifndef SOCKET
+#define SOCKET int
+#endif
 
 int alya_vpn_sock_send_hex(int sock, const char *hex_str, int hex_len) {
     if (!hex_str || hex_len <= 0 || hex_len % 2 != 0) return 0;
-    int byte_len = hex_len / 2;
+    int total_bytes = hex_len / 2;
+    int total_sent = 0;
     unsigned char buf[8192];
-    if (byte_len > (int)sizeof(buf)) byte_len = (int)sizeof(buf);
-
-    for (int i = 0; i < byte_len; ++i) {
-        int hi = hex_str[i * 2];
-        int lo = hex_str[i * 2 + 1];
-        int v_hi = (hi >= '0' && hi <= '9') ? hi - '0' : (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10 : (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10 : 0;
-        int v_lo = (lo >= '0' && lo <= '9') ? lo - '0' : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10 : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10 : 0;
-        buf[i] = (unsigned char)((v_hi << 4) | v_lo);
+    int offset = 0;
+    while (offset < total_bytes) {
+        int chunk_bytes = total_bytes - offset;
+        if (chunk_bytes > (int)sizeof(buf)) chunk_bytes = (int)sizeof(buf);
+        for (int i = 0; i < chunk_bytes; ++i) {
+            int hi = hex_str[(offset + i) * 2];
+            int lo = hex_str[(offset + i) * 2 + 1];
+            int v_hi = (hi >= '0' && hi <= '9') ? hi - '0' : (hi >= 'a' && hi <= 'f') ? hi - 'a' + 10 : (hi >= 'A' && hi <= 'F') ? hi - 'A' + 10 : 0;
+            int v_lo = (lo >= '0' && lo <= '9') ? lo - '0' : (lo >= 'a' && lo <= 'f') ? lo - 'a' + 10 : (lo >= 'A' && lo <= 'F') ? lo - 'A' + 10 : 0;
+            buf[i] = (unsigned char)((v_hi << 4) | v_lo);
+        }
+        int s = send((SOCKET)sock, (const char *)buf, chunk_bytes, 0);
+        if (s <= 0) return s;
+        total_sent += s;
+        offset += chunk_bytes;
     }
-    return send((SOCKET)sock, (const char *)buf, byte_len, 0);
+    return total_sent;
 }
 

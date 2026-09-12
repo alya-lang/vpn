@@ -5,16 +5,22 @@ import "../ffi.alya"
 
 # Allocates a zero-initialized string buffer of exact byte length
 function alloc_str(count)
-    let res = ""
-    let chunk = "0000000000000000"
+    if count <= 0
+        return ""
+    end
+    let res = "0"
+    while len(res) * 2 <= count
+        res = res + res
+    end
     while len(res) + 16 <= count
-        res += chunk
+        res = res + "0000000000000000"
     end
     while len(res) < count
-        res += "0"
+        res = res + "0"
     end
     return res
 end
+
 
 # Derives a 32-byte (64 hex characters) symmetric encryption key from a passphrase
 function vpn_derive_key(passphrase)

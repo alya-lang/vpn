@@ -82,6 +82,7 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
                     end
                     next_channel_id += 1
                 else
+                    say("[WARN] SOCKS5 handshake failed or timed out for " + proc_name + " (port " + peer_port + ")")
                     net::tcp_close(app_sock)
                 end
             end
@@ -105,22 +106,24 @@ function vpn_relay_direct(app_sock, host, port)
     while active == 1
         # App -> Dest
         if net::tcp_poll(app_sock, 5) == 1
-            let data = net::tcp_recv(app_sock, 4096)
-            if len(data) == 0
+            let app_hex = alya_vpn_sock_recv_hex(app_sock, 4096)
+            let hlen = len(app_hex)
+            if hlen == 0
                 active = 0
                 break
             end
-            net::tcp_send(dest_sock, data)
+            alya_vpn_sock_send_hex(dest_sock, app_hex, hlen)
         end
 
         # Dest -> App
         if net::tcp_poll(dest_sock, 5) == 1
-            let data = net::tcp_recv(dest_sock, 4096)
-            if len(data) == 0
+            let dest_hex = alya_vpn_sock_recv_hex(dest_sock, 4096)
+            let hlen = len(dest_hex)
+            if hlen == 0
                 active = 0
                 break
             end
-            net::tcp_send(app_sock, data)
+            alya_vpn_sock_send_hex(app_sock, dest_hex, hlen)
         end
     end
 
@@ -185,9 +188,9 @@ function vpn_relay_via_tunnel(app_sock, channel_id, server_host, server_port, se
     while active == 1
         # From App -> Encrypt -> Send to VPN Server
         if net::tcp_poll(app_sock, 5) == 1
-            let app_data = net::tcp_recv(app_sock, 4096)
-            if len(app_data) == 0
-                # App closed socket
+            let app_hex = alya_vpn_sock_recv_hex(app_sock, 4096)
+            let hlen = len(app_hex)
+            if hlen == 0
                 let close_frame = proto::pack_frame(session_key, proto::msg_close(), "" + channel_id)
                 if close_frame != null
                     net::tcp_send(vpn_sock, close_frame)
@@ -196,7 +199,7 @@ function vpn_relay_via_tunnel(app_sock, channel_id, server_host, server_port, se
                 break
             end
 
-            let data_payload = proto::pack_data_payload(channel_id, app_data)
+            let data_payload = proto::pack_data_payload(channel_id, app_hex)
             let frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
             if frame != null
                 net::tcp_send(vpn_sock, frame)
@@ -223,9 +226,9 @@ function vpn_relay_via_tunnel(app_sock, channel_id, server_host, server_port, se
 
                 let msg_type, payload = proto::unpack_frame(session_key, line)
                 if msg_type == proto::msg_data() and payload != null
-                    let d_ok, d_ch, data = proto::unpack_data_payload(payload)
+                    let d_ok, d_ch, hex_data = proto::unpack_data_payload(payload)
                     if d_ok == 1
-                        net::tcp_send(app_sock, data)
+                        alya_vpn_sock_send_hex(app_sock, hex_data, len(hex_data))
                     end
                 else if msg_type == proto::msg_close()
                     active = 0
@@ -239,3 +242,4 @@ function vpn_relay_via_tunnel(app_sock, channel_id, server_host, server_port, se
     net::tcp_close(app_sock)
     return 1
 end
+

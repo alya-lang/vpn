@@ -2,6 +2,7 @@
 # Pure Alya implementation without external dependencies
 
 import "./crypto.alya" as crypto
+import "../ffi.alya"
 
 # Message Types
 function msg_handshake_req() return 1 end
@@ -136,7 +137,7 @@ end
 
 # Serializes DATA payload: "channel_id|data"
 function pack_data_payload(channel_id, raw_data)
-    return "" + channel_id + "|" + raw_data
+    return alya_vpn_pack_data_payload(channel_id, raw_data)
 end
 
 # Parses DATA payload: returns ok, channel_id, data_str
@@ -169,57 +170,21 @@ end
 # Envelope structure:
 # [Magic: 2 chars "AV"] [Version: 2 hex "01"] [Type: 2 hex] [Nonce: 24 hex] [Tag: 32 hex] [Cipher_Hex: N*2 chars] \n
 function pack_frame(session_key, msg_type, plaintext_payload)
-    let type_hex = byte_to_hex(msg_type)
-    let nonce = crypto::vpn_gen_nonce()
-    let cipher, tag, err = crypto::vpn_encrypt(session_key, nonce, plaintext_payload)
-    if err != 0
+    let frame = alya_vpn_pack_frame(session_key, msg_type, plaintext_payload, len(plaintext_payload))
+    if len(frame) == 0
         return null
     end
-
-    let frame = "AV01" + type_hex + nonce + tag + cipher + "\n"
     return frame
 end
 
 # Unpacks and authenticates an incoming frame
-# Returns tuple: msg_type, plaintext (or null, null on failure)
+# Returns tuple: msg_type, plaintext (or 0, null on failure)
 function unpack_frame(session_key, frame_line)
-    let flen = len(frame_line)
-    # Strip trailing newline if present
-    let s = frame_line
-    if flen > 0 and char_at(s, flen - 1) == "\n"
-        s = s.substring(0, flen - 1)
-        flen = len(s)
-    end
-    if flen > 0 and char_at(s, flen - 1) == "\r"
-        s = s.substring(0, flen - 1)
-        flen = len(s)
-    end
-
-    # Header: "AV" (2) + "01" (2) + Type (2) + Nonce (24) + Tag (32) = 62 characters min
-    if flen < 62
+    let plain = alya_vpn_unpack_frame(session_key, frame_line, len(frame_line))
+    let msg_type = alya_vpn_unpack_frame_type()
+    if msg_type == 0
         return 0, null
     end
-
-    let magic = s.substring(0, 2)
-    if magic != "AV"
-        return 0, null
-    end
-
-    let ver = s.substring(2, 2)
-    if ver != "01"
-        return 0, null
-    end
-
-    let type_hex = s.substring(4, 2)
-    let msg_type = hex_to_byte(type_hex)
-    let nonce = s.substring(6, 24)
-    let tag = s.substring(30, 32)
-    let cipher = s.substring(62, flen - 62)
-
-    let plain = crypto::vpn_decrypt(session_key, nonce, cipher, tag)
-    if plain == null
-        return 0, null # Authentication or integrity failure
-    end
-
     return msg_type, plain
 end
+

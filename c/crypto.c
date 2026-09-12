@@ -431,3 +431,135 @@ int alya_vpn_decrypt(
     free(ciphertext);
     return 0;
 }
+
+static char s_frame_buf[131072];
+static char s_plain_buf[65536];
+static int s_last_unpack_type = 0;
+
+int alya_vpn_unpack_frame_type(void) {
+    return s_last_unpack_type;
+}
+
+const char *alya_vpn_pack_frame(const char *key_hex, int msg_type, const char *payload, int payload_len) {
+    if (!key_hex || msg_type <= 0 || payload_len < 0) return "";
+    if (payload_len > 32768) return "";
+
+    uint8_t key[32];
+    if (hex_to_bytes(key_hex, 64, key, 32) != 0) return "";
+
+    // Generate random 12-byte nonce
+    uint8_t nonce[12];
+    char nonce_hex[25];
+    alya_vpn_gen_nonce(nonce_hex);
+    hex_to_bytes(nonce_hex, 24, nonce, 12);
+
+    // 1. One-time Poly1305 key generation via ChaCha20 block 0
+    uint8_t poly_key[32] = {0};
+    chacha20_xor(key, nonce, 0, poly_key, poly_key, 32);
+
+    // 2. Encrypt plaintext starting at counter 1
+    uint8_t ciphertext[32768];
+    if (payload_len > 0 && payload) {
+        chacha20_xor(key, nonce, 1, (const uint8_t *)payload, ciphertext, (size_t)payload_len);
+    }
+
+    // 3. Compute Poly1305 MAC tag
+    uint8_t tag[16];
+    poly1305_mac(ciphertext, (size_t)payload_len, poly_key, tag);
+
+    // 4. Build frame: "AV01" + type_hex(2) + nonce_hex(24) + tag_hex(32) + cipher_hex(2*len) + "\n"
+    static const char hex_chars[] = "0123456789abcdef";
+    s_frame_buf[0] = 'A';
+    s_frame_buf[1] = 'V';
+    s_frame_buf[2] = '0';
+    s_frame_buf[3] = '1';
+    s_frame_buf[4] = hex_chars[(msg_type >> 4) & 0x0F];
+    s_frame_buf[5] = hex_chars[msg_type & 0x0F];
+    memcpy(&s_frame_buf[6], nonce_hex, 24);
+    bytes_to_hex(tag, 16, &s_frame_buf[30]);
+    bytes_to_hex(ciphertext, (size_t)payload_len, &s_frame_buf[62]);
+
+    int total_len = 62 + (payload_len * 2);
+    s_frame_buf[total_len] = '\n';
+    s_frame_buf[total_len + 1] = '\0';
+
+    return s_frame_buf;
+}
+
+const char *alya_vpn_unpack_frame(const char *key_hex, const char *frame_line, int frame_len) {
+    s_last_unpack_type = 0;
+    if (!key_hex || !frame_line || frame_len < 62) return "";
+
+    // Strip trailing \r / \n
+    while (frame_len > 0 && (frame_line[frame_len - 1] == '\n' || frame_line[frame_len - 1] == '\r')) {
+        frame_len--;
+    }
+    if (frame_len < 62) return "";
+
+    if (frame_line[0] != 'A' || frame_line[1] != 'V' || frame_line[2] != '0' || frame_line[3] != '1') {
+        return "";
+    }
+
+    uint8_t key[32];
+    if (hex_to_bytes(key_hex, 64, key, 32) != 0) return "";
+
+    // Message type
+    uint8_t type_byte = 0;
+    if (hex_to_bytes(&frame_line[4], 2, &type_byte, 1) != 0) return "";
+
+    // Nonce
+    uint8_t nonce[12];
+    if (hex_to_bytes(&frame_line[6], 24, nonce, 12) != 0) return "";
+
+    // Expected tag
+    uint8_t expected_tag[16];
+    if (hex_to_bytes(&frame_line[30], 32, expected_tag, 16) != 0) return "";
+
+    // Ciphertext
+    int cipher_hex_len = frame_len - 62;
+    if (cipher_hex_len % 2 != 0) return "";
+    int raw_len = cipher_hex_len / 2;
+    if (raw_len > (int)sizeof(s_plain_buf) - 8) return "";
+
+    uint8_t ciphertext[32768];
+    if (raw_len > (int)sizeof(ciphertext)) return "";
+    if (raw_len > 0) {
+        if (hex_to_bytes(&frame_line[62], (size_t)cipher_hex_len, ciphertext, (size_t)raw_len) != 0) {
+            return "";
+        }
+    }
+
+    // 1. One-time Poly1305 key generation via ChaCha20 block 0
+    uint8_t poly_key[32] = {0};
+    chacha20_xor(key, nonce, 0, poly_key, poly_key, 32);
+
+    // 2. Compute and verify Poly1305 MAC
+    uint8_t computed_tag[16];
+    poly1305_mac(ciphertext, (size_t)raw_len, poly_key, computed_tag);
+
+    int diff = 0;
+    for (int i = 0; i < 16; ++i) {
+        diff |= (computed_tag[i] ^ expected_tag[i]);
+    }
+    if (diff != 0) {
+        return ""; // MAC verification failed!
+    }
+
+    // 3. Decrypt ciphertext starting at counter 1
+    if (raw_len > 0) {
+        chacha20_xor(key, nonce, 1, ciphertext, (uint8_t *)s_plain_buf, (size_t)raw_len);
+    }
+    s_plain_buf[raw_len] = '\0';
+    s_last_unpack_type = (int)type_byte;
+
+    return s_plain_buf;
+}
+
+static char s_data_payload_buf[65536];
+
+const char *alya_vpn_pack_data_payload(int channel_id, const char *hex_data) {
+    if (!hex_data) hex_data = "";
+    snprintf(s_data_payload_buf, sizeof(s_data_payload_buf), "%d|%s", channel_id, hex_data);
+    return s_data_payload_buf;
+}
+

@@ -113,6 +113,39 @@ function load_client_config(config_path)
     return cfg
 end
 
+# Loads server configuration from config/server.toml
+function load_server_config(config_path)
+    if file_exists(config_path) == 0
+        return null
+    end
+    let content = read_file(config_path)
+    let lines = proto::split_string(content, "\n")
+    let cfg = {
+        "port": 51821,
+        "passphrase": "change_me_to_a_secure_shared_passphrase_2026"
+    }
+    let i = 0
+    while i < len(lines)
+        let line = lines[i]
+        let hash_idx = proto::find_char(line, "#")
+        if hash_idx >= 0
+            line = line.substring(0, hash_idx)
+        end
+        let eq_idx = proto::find_char(line, "=")
+        if eq_idx >= 0
+            let key = strip_val(line.substring(0, eq_idx))
+            let val = line.substring(eq_idx + 1)
+            if key == "port"
+                cfg["port"] = proto::parse_number(strip_val(val))
+            else if key == "passphrase"
+                cfg["passphrase"] = strip_val(val)
+            end
+        end
+        i += 1
+    end
+    return cfg
+end
+
 function main()
     let args_list = args()
     if len(args_list) < 1
@@ -127,9 +160,24 @@ function main()
         let port = 51821
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
 
+        # Check default config/server.toml if exists
+        let srv_cfg_file = "config/server.toml"
+        let file_cfg = load_server_config(srv_cfg_file)
+        if file_cfg != null
+            port = file_cfg["port"]
+            pass = file_cfg["passphrase"]
+        end
+
         let i = 1
         while i < len(args_list)
-            if args_list[i] == "--port" and i + 1 < len(args_list)
+            if args_list[i] == "--config" and i + 1 < len(args_list)
+                let custom_cfg = load_server_config(args_list[i + 1])
+                if custom_cfg != null
+                    port = custom_cfg["port"]
+                    pass = custom_cfg["passphrase"]
+                end
+                i += 2
+            else if args_list[i] == "--port" and i + 1 < len(args_list)
                 port = proto::parse_number(args_list[i + 1])
                 i += 2
             else if args_list[i] == "--pass" and i + 1 < len(args_list)
@@ -144,6 +192,7 @@ function main()
         server::vpn_run_server(port, pass)
         return 0
     end
+
 
     # --- COMMAND: CLIENT ---
     if cmd == "client"
