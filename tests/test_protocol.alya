@@ -11,17 +11,19 @@ function main()
 
     # 1. Connect request payload packing & unpacking
     let c_payload = proto::pack_connect_req_payload(42, proto::proto_tcp(), "discord.com", 443)
-    let c_unpacked = proto::unpack_connect_req_payload(c_payload)
-    runner_assert_eq(r, c_unpacked["channel_id"], 42, "Channel ID should match 42")
-    runner_assert_eq(r, c_unpacked["proto"], proto::proto_tcp(), "Proto should be TCP (1)")
-    runner_assert_str_eq(r, c_unpacked["target_host"], "discord.com", "Target host should be discord.com")
-    runner_assert_eq(r, c_unpacked["target_port"], 443, "Target port should be 443")
+    let c_ok, c_ch, c_proto, c_host, c_port = proto::unpack_connect_req_payload(c_payload)
+    runner_assert_eq(r, c_ok, 1, "Connect request payload unpack status should be 1")
+    runner_assert_eq(r, c_ch, 42, "Channel ID should match 42")
+    runner_assert_eq(r, c_proto, proto::proto_tcp(), "Proto should be TCP (1)")
+    runner_assert_str_eq(r, c_host, "discord.com", "Target host should be discord.com")
+    runner_assert_eq(r, c_port, 443, "Target port should be 443")
 
     # 2. Data payload packing & unpacking
     let d_payload = proto::pack_data_payload(42, "GET /api/v9/gateway HTTP/1.1\r\nHost: discord.com\r\n\r\n")
-    let d_unpacked = proto::unpack_data_payload(d_payload)
-    runner_assert_eq(r, d_unpacked["channel_id"], 42, "Data Channel ID should match")
-    runner_assert_str_eq(r, d_unpacked["data"], "GET /api/v9/gateway HTTP/1.1\r\nHost: discord.com\r\n\r\n", "Data payload must match")
+    let d_ok, d_ch, d_data = proto::unpack_data_payload(d_payload)
+    runner_assert_eq(r, d_ok, 1, "Data payload unpack status should be 1")
+    runner_assert_eq(r, d_ch, 42, "Data Channel ID should match")
+    runner_assert_str_eq(r, d_data, "GET /api/v9/gateway HTTP/1.1\r\nHost: discord.com\r\n\r\n", "Data payload must match")
 
     # 3. Full Frame packing, encryption, and unpacking
     let frame = proto::pack_frame(key, proto::msg_data(), d_payload)

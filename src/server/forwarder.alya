@@ -83,7 +83,8 @@ function vpn_handle_client(client_sock, session_key)
 
         # 2. Check active destination channels for incoming response data
         for ch_id in keys(channels)
-            let dest_sock = channels[ch_id]
+            let ch_key = "" + ch_id
+            let dest_sock = channels[ch_key]
             let poll_dest = net::tcp_poll(dest_sock, 5)
             if poll_dest == 1
                 let dest_data = net::tcp_recv(dest_sock, 8192)
@@ -96,7 +97,7 @@ function vpn_handle_client(client_sock, session_key)
                         net::tcp_send(client_sock, close_frame)
                     end
                     net::tcp_close(dest_sock)
-                    channels.remove(ch_id)
+                    channels.remove(ch_key)
                 else
                     # Encrypt and forward received data back to client
                     let data_payload = proto::pack_data_payload(ch_id, dest_data)
@@ -111,7 +112,8 @@ function vpn_handle_client(client_sock, session_key)
 
     # Clean up any open channels on client disconnect
     for ch_id in keys(channels)
-        let s = channels[ch_id]
+        let ch_key = "" + ch_id
+        let s = channels[ch_key]
         net::tcp_close(s)
     end
     net::tcp_close(client_sock)
@@ -121,14 +123,11 @@ end
 function vpn_process_client_message(client_sock, session_key, channels, msg_type, payload)
     # CONNECT REQUEST
     if msg_type == proto::msg_connect_req()
-        let req = proto::unpack_connect_req_payload(payload)
-        if req == null
+        let ok, ch_id, proto_type, host, port = proto::unpack_connect_req_payload(payload)
+        if ok == 0
             return 0
         end
 
-        let ch_id = req["channel_id"]
-        let host = req["target_host"]
-        let port = req["target_port"]
         say("[FORWARD] CONNECT requested: Channel " + ch_id + " -> " + host + ":" + port)
 
         let target_sock = net::tcp_connect(host, port)
@@ -142,7 +141,8 @@ function vpn_process_client_message(client_sock, session_key, channels, msg_type
             return 0
         end
 
-        channels[ch_id] = target_sock
+        let ch_key = "" + ch_id
+        channels[ch_key] = target_sock
         say("[FORWARD] Connected to " + host + ":" + port + " (Channel " + ch_id + ")")
 
         let ok_payload = proto::pack_connect_resp_payload(ch_id, proto::status_ok(), "Connected")
@@ -155,16 +155,14 @@ function vpn_process_client_message(client_sock, session_key, channels, msg_type
 
     # DATA FORWARD
     if msg_type == proto::msg_data()
-        let data_pkg = proto::unpack_data_payload(payload)
-        if data_pkg == null
+        let ok, ch_id, raw_data = proto::unpack_data_payload(payload)
+        if ok == 0
             return 0
         end
 
-        let ch_id = data_pkg["channel_id"]
-        let raw_data = data_pkg["data"]
-
-        if channels.has(ch_id)
-            let target_sock = channels[ch_id]
+        let ch_key = "" + ch_id
+        if channels.has(ch_key)
+            let target_sock = channels[ch_key]
             net::tcp_send(target_sock, raw_data)
         end
         return 1
@@ -172,11 +170,12 @@ function vpn_process_client_message(client_sock, session_key, channels, msg_type
 
     # CHANNEL CLOSE
     if msg_type == proto::msg_close()
-        let ch_id = proto::parse_number(payload)
-        if channels.has(ch_id)
-            let s = channels[ch_id]
+        let ok, ch_id, reason = proto::unpack_close_payload(payload)
+        let ch_key = "" + ch_id
+        if ok == 1 and channels.has(ch_key)
+            let s = channels[ch_key]
             net::tcp_close(s)
-            channels.remove(ch_id)
+            channels.remove(ch_key)
             say("[FORWARD] Closed channel " + ch_id)
         end
         return 1

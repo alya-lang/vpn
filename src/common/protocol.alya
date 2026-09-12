@@ -110,18 +110,13 @@ function pack_connect_req_payload(channel_id, proto, target_host, target_port)
     return "" + channel_id + "|" + proto + "|" + target_host + "|" + target_port
 end
 
-# Parses CONNECT_REQ payload
+# Parses CONNECT_REQ payload: returns ok, channel_id, proto, target_host, target_port
 function unpack_connect_req_payload(payload)
     let parts = split_string(payload, "|")
     if len(parts) < 4
-        return null
+        return 0, 0, 0, "", 0
     end
-    return {
-        "channel_id": parse_number(parts[0]),
-        "proto": parse_number(parts[1]),
-        "target_host": parts[2],
-        "target_port": parse_number(parts[3])
-    }
+    return 1, parse_number(parts[0]), parse_number(parts[1]), parts[2], parse_number(parts[3])
 end
 
 # Serializes CONNECT_RESP payload: "channel_id|status|message"
@@ -129,18 +124,14 @@ function pack_connect_resp_payload(channel_id, status, message)
     return "" + channel_id + "|" + status + "|" + message
 end
 
-# Parses CONNECT_RESP payload
+# Parses CONNECT_RESP payload: returns ok, channel_id, status, message
 function unpack_connect_resp_payload(payload)
     let parts = split_string(payload, "|")
     if len(parts) < 2
-        return null
+        return 0, 0, 0, ""
     end
     let msg = if len(parts) >= 3 then parts[2] else ""
-    return {
-        "channel_id": parse_number(parts[0]),
-        "status": parse_number(parts[1]),
-        "message": msg
-    }
+    return 1, parse_number(parts[0]), parse_number(parts[1]), msg
 end
 
 # Serializes DATA payload: "channel_id|data"
@@ -148,18 +139,15 @@ function pack_data_payload(channel_id, raw_data)
     return "" + channel_id + "|" + raw_data
 end
 
-# Parses DATA payload
+# Parses DATA payload: returns ok, channel_id, data_str
 function unpack_data_payload(payload)
     let idx = find_char(payload, "|")
     if idx < 0
-        return null
+        return 0, 0, ""
     end
     let ch_str = payload.substring(0, idx)
     let data_str = payload.substring(idx + 1)
-    return {
-        "channel_id": parse_number(ch_str),
-        "data": data_str
-    }
+    return 1, parse_number(ch_str), data_str
 end
 
 # Serializes CLOSE payload: "channel_id|reason"
@@ -167,17 +155,14 @@ function pack_close_payload(channel_id, reason)
     return "" + channel_id + "|" + reason
 end
 
-# Parses CLOSE payload
+# Parses CLOSE payload: returns ok, channel_id, reason
 function unpack_close_payload(payload)
     let parts = split_string(payload, "|")
     if len(parts) < 1
-        return null
+        return 0, 0, 0
     end
     let reason = if len(parts) >= 2 then parse_number(parts[1]) else 0
-    return {
-        "channel_id": parse_number(parts[0]),
-        "reason": reason
-    }
+    return 1, parse_number(parts[0]), reason
 end
 
 # Packs an authenticated and encrypted envelope frame
