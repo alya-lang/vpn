@@ -37,6 +37,82 @@ function print_usage()
     say("  benchmark                   Run ChaCha20-Poly1305 encryption benchmark\n")
 end
 
+# Strips whitespace and quotes from string
+function strip_val(s)
+    let res = ""
+    let slen = len(s)
+    let i = 0
+    while i < slen
+        let ch = char_at(s, i)
+        if ch != " " and ch != "\t" and ch != "\"" and ch != "\r" and ch != "\n"
+            res += ch
+        end
+        i += 1
+    end
+    return res
+end
+
+# Loads client configuration from config/client.toml
+function load_client_config(config_path)
+    if file_exists(config_path) == 0
+        return null
+    end
+    let content = read_file(config_path)
+    let lines = proto::split_string(content, "\n")
+    let cfg = {
+        "server_host": "127.0.0.1",
+        "server_port": 51820,
+        "local_port": 1080,
+        "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
+        "mode": "exclude",
+        "apps": []
+    }
+    let in_apps = 0
+    let i = 0
+    while i < len(lines)
+        let line = lines[i]
+        let hash_idx = proto::find_char(line, "#")
+        if hash_idx >= 0
+            line = line.substring(0, hash_idx)
+        end
+        let eq_idx = proto::find_char(line, "=")
+        if eq_idx >= 0
+            let key = strip_val(line.substring(0, eq_idx))
+            let val = line.substring(eq_idx + 1)
+            if key == "server_host"
+                cfg["server_host"] = strip_val(val)
+            else if key == "server_port"
+                cfg["server_port"] = proto::parse_number(strip_val(val))
+            else if key == "local_proxy_port" or key == "local_port"
+                cfg["local_port"] = proto::parse_number(strip_val(val))
+            else if key == "passphrase"
+                cfg["passphrase"] = strip_val(val)
+            else if key == "mode"
+                cfg["mode"] = strip_val(val)
+            else if key == "apps"
+                in_apps = 1
+                if proto::find_char(val, "]") >= 0
+                    in_apps = 0
+                end
+            end
+        else if in_apps == 1
+            if proto::find_char(line, "]") >= 0
+                in_apps = 0
+            else
+                let app_clean = strip_val(line)
+                if len(app_clean) > 0 and char_at(app_clean, len(app_clean) - 1) == ","
+                    app_clean = app_clean.substring(0, len(app_clean) - 1)
+                end
+                if len(app_clean) > 0
+                    cfg["apps"].push(app_clean)
+                end
+            end
+        end
+        i += 1
+    end
+    return cfg
+end
+
 function main()
     let args_list = args()
     if len(args_list) < 1
@@ -49,7 +125,7 @@ function main()
     # --- COMMAND: SERVER ---
     if cmd == "server"
         let port = 51820
-        let pass = "alya_vpn_secret_2026"
+        let pass = "change_me_to_a_secure_shared_passphrase_2026"
 
         let i = 1
         while i < len(args_list)
@@ -74,9 +150,30 @@ function main()
         let srv_host = "127.0.0.1"
         let srv_port = 51820
         let proxy_port = 1080
-        let pass = "alya_vpn_secret_2026"
+        let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let split_mode = router::mode_exclude() # Default blacklist
         let app_list = ["discord", "Discord.exe"]
+
+        # 1. Automatically load config/client.toml if present
+        let cfg_file = "config/client.toml"
+        let file_cfg = load_client_config(cfg_file)
+        if file_cfg != null
+            srv_host = file_cfg["server_host"]
+            srv_port = file_cfg["server_port"]
+            proxy_port = file_cfg["local_port"]
+            pass = file_cfg["passphrase"]
+            let m = lower(file_cfg["mode"])
+            if m == "all"
+                split_mode = router::mode_all()
+            else if m == "inc" or m == "include"
+                split_mode = router::mode_include()
+            else if m == "exc" or m == "exclude"
+                split_mode = router::mode_exclude()
+            end
+            if len(file_cfg["apps"]) > 0
+                app_list = file_cfg["apps"]
+            end
+        end
 
         let i = 1
         while i < len(args_list)
