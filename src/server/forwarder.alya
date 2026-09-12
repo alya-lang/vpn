@@ -101,7 +101,7 @@ function vpn_handle_client(client_sock, session_key)
                     channels.remove(ch_key)
                 else
                     # Encrypt and forward received data back to client
-                    let data_payload = proto::pack_data_payload(ch_id, dest_hex)
+                    let data_payload = proto::pack_data_payload(proto::parse_number(ch_key), dest_hex)
                     let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
                     if data_frame != null
                         net::tcp_send(client_sock, data_frame)

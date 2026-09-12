@@ -35,7 +35,7 @@ end
 function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps)
     let session_key = crypto::vpn_derive_key(passphrase)
 
-    let proxy_sock = net::tcp_listen(local_port, 32)
+    let proxy_sock = net::tcp_listen(local_port, 64)
     if proxy_sock < 0
         say("[ERROR] Failed to start local SOCKS5 proxy on port " + local_port)
         return 1
@@ -56,11 +56,27 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
     say("[INFO] Rules: " + len(split_apps) + " application(s) configured")
     say("[INFO] ========================================")
 
+    say("[INFO] Connecting to VPN tunnel server " + server_host + ":" + server_port + "...")
+    let vpn_sock = net::tcp_connect(server_host, server_port)
+    if vpn_sock < 0
+        say("[ERROR] Could not connect to remote VPN server " + server_host + ":" + server_port)
+        net::tcp_close(proxy_sock)
+        return 1
+    end
+    say("[INFO] Encrypted VPN tunnel established successfully!")
+
+    # Active tunnel channels: maps channel_id (string) -> app_sock
+    let active_channels = map()
+    # Active direct bypasses: maps app_sock (string) -> dest_sock
+    let direct_connections = map()
+
     let next_channel_id = 1
+    let vpn_buffer = ""
 
     while 1
-        let poll_res = net::tcp_poll(proxy_sock, 100)
-        if poll_res == 1
+        # 1. Accept new local SOCKS5 connections
+        let poll_proxy = net::tcp_poll(proxy_sock, 2)
+        if poll_proxy == 1
             let app_sock = net::tcp_accept(proxy_sock)
             if app_sock >= 0
                 let peer_port = net::tcp_peer_port(app_sock)
@@ -72,174 +88,142 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
                 let ok, host, port = parse_socks5_request(app_sock)
                 if ok == 1
                     let route_vpn = router::should_route_through_vpn(split_mode, split_apps, proc_name)
-
                     if route_vpn == 1
-                        say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Routing via VPN Server)")
-                        vpn_relay_via_tunnel(app_sock, next_channel_id, server_host, server_port, session_key, host, port)
+                        say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Channel " + next_channel_id + ")")
+                        let req_payload = proto::pack_connect_req_payload(next_channel_id, proto::proto_tcp(), host, port)
+                        let req_frame = proto::pack_frame(session_key, proto::msg_connect_req(), req_payload)
+                        if req_frame != null
+                            net::tcp_send(vpn_sock, req_frame)
+                            active_channels["" + next_channel_id] = app_sock
+                            next_channel_id += 1
+                        else
+                            net::tcp_close(app_sock)
+                        end
                     else
-                        say("[DIRECT] [" + proc_name + "] -> " + host + ":" + port + " (Bypassing VPN, Direct Connection)")
-                        vpn_relay_direct(app_sock, host, port)
+                        say("[DIRECT] [" + proc_name + "] -> " + host + ":" + port + " (Bypassing VPN)")
+                        let dest_sock = net::tcp_connect(host, port)
+                        if dest_sock >= 0
+                            direct_connections["" + app_sock] = dest_sock
+                        else
+                            net::tcp_close(app_sock)
+                        end
                     end
-                    next_channel_id += 1
                 else
-                    say("[WARN] SOCKS5 handshake failed or timed out for " + proc_name + " (port " + peer_port + ")")
                     net::tcp_close(app_sock)
                 end
             end
         end
-    end
 
-    net::tcp_close(proxy_sock)
-    return 0
-end
-
-# Relays traffic directly to destination (Bypass VPN)
-function vpn_relay_direct(app_sock, host, port)
-    let dest_sock = net::tcp_connect(host, port)
-    if dest_sock < 0
-        say("[DIRECT] Failed to connect directly to " + host + ":" + port)
-        net::tcp_close(app_sock)
-        return 0
-    end
-
-    let active = 1
-    while active == 1
-        # App -> Dest
-        if net::tcp_poll(app_sock, 5) == 1
-            let app_hex = alya_vpn_sock_recv_hex(app_sock, 4096)
-            let hlen = len(app_hex)
-            if hlen == 0
-                active = 0
-                break
+        # 2. Check all active VPN tunnel apps (Chrome -> Server)
+        for ch_id in keys(active_channels)
+            let ch_key = "" + ch_id
+            let app_sock = active_channels[ch_key]
+            let p_app = net::tcp_poll(app_sock, 1)
+            if p_app == 1
+                let app_hex = alya_vpn_sock_recv_hex(app_sock, 4096)
+                let hlen = len(app_hex)
+                if hlen == 0
+                    # App closed connection
+                    let close_frame = proto::pack_frame(session_key, proto::msg_close(), "" + ch_id)
+                    if close_frame != null
+                        net::tcp_send(vpn_sock, close_frame)
+                    end
+                    net::tcp_close(app_sock)
+                    active_channels.remove(ch_key)
+                else
+                    let data_payload = proto::pack_data_payload(proto::parse_number(ch_key), app_hex)
+                    let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
+                    if data_frame != null
+                        net::tcp_send(vpn_sock, data_frame)
+                    end
+                end
             end
-            alya_vpn_sock_send_hex(dest_sock, app_hex, hlen)
         end
 
-        # Dest -> App
-        if net::tcp_poll(dest_sock, 5) == 1
-            let dest_hex = alya_vpn_sock_recv_hex(dest_sock, 4096)
-            let hlen = len(dest_hex)
-            if hlen == 0
-                active = 0
-                break
-            end
-            alya_vpn_sock_send_hex(app_sock, dest_hex, hlen)
-        end
-    end
-
-    net::tcp_close(dest_sock)
-    net::tcp_close(app_sock)
-    return 1
-end
-
-# Relays traffic encrypted through VPN server tunnel
-function vpn_relay_via_tunnel(app_sock, channel_id, server_host, server_port, session_key, target_host, target_port)
-    let vpn_sock = net::tcp_connect(server_host, server_port)
-    if vpn_sock < 0
-        say("[ERROR] Failed to connect to VPN server " + server_host + ":" + server_port)
-        net::tcp_close(app_sock)
-        return 0
-    end
-
-    # 1. Send CONNECT_REQ frame
-    let req_payload = proto::pack_connect_req_payload(channel_id, proto::proto_tcp(), target_host, target_port)
-    let req_frame = proto::pack_frame(session_key, proto::msg_connect_req(), req_payload)
-    if req_frame == null
-        net::tcp_close(vpn_sock)
-        net::tcp_close(app_sock)
-        return 0
-    end
-    net::tcp_send(vpn_sock, req_frame)
-
-    # 2. Wait for CONNECT_RESP
-    let connected = 0
-    let vpn_buffer = ""
-    let wait_count = 0
-    while wait_count < 50 and connected == 0 # 5 seconds max
-        if net::tcp_poll(vpn_sock, 100) == 1
-            let chunk = net::tcp_recv(vpn_sock, 4096)
-            vpn_buffer += chunk
-            let nl = proto::find_char(vpn_buffer, "\n")
-            if nl >= 0
-                let line = vpn_buffer.substring(0, nl)
-                vpn_buffer = vpn_buffer.substring(nl + 1)
-                let msg_type, payload = proto::unpack_frame(session_key, line)
-                if msg_type == proto::msg_connect_resp() and payload != null
-                    let resp_ok, resp_ch, resp_status, resp_msg = proto::unpack_connect_resp_payload(payload)
-                    if resp_ok == 1 and resp_status == proto::status_ok()
-                        connected = 1
+        # 3. Check VPN Server responses (Server -> Chrome)
+        let p_vpn = net::tcp_poll(vpn_sock, 2)
+        if p_vpn == 1
+            let chunk = net::tcp_recv(vpn_sock, 8192)
+            if len(chunk) == 0
+                say("[WARN] VPN server connection lost. Reconnecting...")
+                net::tcp_close(vpn_sock)
+                vpn_sock = net::tcp_connect(server_host, server_port)
+                if vpn_sock < 0
+                    say("[ERROR] Failed to reconnect to VPN server.")
+                    break
+                end
+                vpn_buffer = ""
+            else
+                vpn_buffer += chunk
+                while 1
+                    let nl_idx = proto::find_char(vpn_buffer, "\n")
+                    if nl_idx < 0
                         break
                     end
-                end
-            end
-        end
-        wait_count += 1
-    end
+                    let frame_line = vpn_buffer.substring(0, nl_idx)
+                    vpn_buffer = vpn_buffer.substring(nl_idx + 1)
 
-    if connected == 0
-        say("[ERROR] VPN server could not establish connection to " + target_host + ":" + target_port)
-        net::tcp_close(vpn_sock)
-        net::tcp_close(app_sock)
-        return 0
-    end
-
-    # 3. Bidirectional Relay: App <-> Encrypted VPN Tunnel
-    let active = 1
-    while active == 1
-        # From App -> Encrypt -> Send to VPN Server
-        if net::tcp_poll(app_sock, 5) == 1
-            let app_hex = alya_vpn_sock_recv_hex(app_sock, 4096)
-            let hlen = len(app_hex)
-            if hlen == 0
-                let close_frame = proto::pack_frame(session_key, proto::msg_close(), "" + channel_id)
-                if close_frame != null
-                    net::tcp_send(vpn_sock, close_frame)
-                end
-                active = 0
-                break
-            end
-
-            let data_payload = proto::pack_data_payload(channel_id, app_hex)
-            let frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
-            if frame != null
-                net::tcp_send(vpn_sock, frame)
-            end
-        end
-
-        # From VPN Server -> Decrypt -> Send to App
-        if net::tcp_poll(vpn_sock, 5) == 1
-            let chunk = net::tcp_recv(vpn_sock, 4096)
-            if len(chunk) == 0
-                active = 0
-                break
-            end
-            vpn_buffer += chunk
-
-            while 1
-                let nl = proto::find_char(vpn_buffer, "\n")
-                if nl < 0
-                    break
-                end
-
-                let line = vpn_buffer.substring(0, nl)
-                vpn_buffer = vpn_buffer.substring(nl + 1)
-
-                let msg_type, payload = proto::unpack_frame(session_key, line)
-                if msg_type == proto::msg_data() and payload != null
-                    let d_ok, d_ch, hex_data = proto::unpack_data_payload(payload)
-                    if d_ok == 1
-                        alya_vpn_sock_send_hex(app_sock, hex_data, len(hex_data))
+                    let msg_type, payload = proto::unpack_frame(session_key, frame_line)
+                    if msg_type == proto::msg_data() and payload != null
+                        let ok, ch_id, hex_data = proto::unpack_data_payload(payload)
+                        let ch_key = "" + ch_id
+                        if ok == 1 and active_channels.has(ch_key)
+                            let app_sock = active_channels[ch_key]
+                            alya_vpn_sock_send_hex(app_sock, hex_data, len(hex_data))
+                        end
+                    else if msg_type == proto::msg_close() and payload != null
+                        let ok, ch_id, reason = proto::unpack_close_payload(payload)
+                        let ch_key = "" + ch_id
+                        if ok == 1 and active_channels.has(ch_key)
+                            let app_sock = active_channels[ch_key]
+                            net::tcp_close(app_sock)
+                            active_channels.remove(ch_key)
+                        end
+                    else if msg_type == proto::msg_connect_resp() and payload != null
+                        let ok, ch_id, status, msg = proto::unpack_connect_resp_payload(payload)
+                        let ch_key = "" + ch_id
+                        if ok == 1 and status != proto::status_ok() and active_channels.has(ch_key)
+                            say("[TUNNEL] Target connection refused on channel " + ch_id + ": " + msg)
+                            let app_sock = active_channels[ch_key]
+                            net::tcp_close(app_sock)
+                            active_channels.remove(ch_key)
+                        end
                     end
-                else if msg_type == proto::msg_close()
-                    active = 0
-                    break
+                end
+            end
+        end
+
+        # 4. Check Direct Connections (Bypass mode)
+        for a_key in keys(direct_connections)
+            let a_sock = proto::parse_number(a_key)
+            let d_sock = direct_connections[a_key]
+
+            if net::tcp_poll(a_sock, 1) == 1
+                let h = alya_vpn_sock_recv_hex(a_sock, 4096)
+                if len(h) == 0
+                    net::tcp_close(a_sock)
+                    net::tcp_close(d_sock)
+                    direct_connections.remove(a_key)
+                else
+                    alya_vpn_sock_send_hex(d_sock, h, len(h))
+                end
+            end
+
+            if direct_connections.has(a_key) and net::tcp_poll(d_sock, 1) == 1
+                let h = alya_vpn_sock_recv_hex(d_sock, 4096)
+                if len(h) == 0
+                    net::tcp_close(a_sock)
+                    net::tcp_close(d_sock)
+                    direct_connections.remove(a_key)
+                else
+                    alya_vpn_sock_send_hex(a_sock, h, len(h))
                 end
             end
         end
     end
 
     net::tcp_close(vpn_sock)
-    net::tcp_close(app_sock)
-    return 1
+    net::tcp_close(proxy_sock)
+    return 0
 end
 
