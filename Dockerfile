@@ -1,11 +1,12 @@
 # ==============================================================================
 # Alya VPN Server - Production Dockerfile
-# Multi-stage lightweight Linux container with bundled C crypto engine
+# Ubuntu 24.04 (Noble) based container matching alyac GLIBC 2.39+
 # ==============================================================================
 
-FROM debian:bookworm-slim AS builder
+FROM ubuntu:24.04 AS builder
 
 ARG ALYA_VERSION=0.0.14
+ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime C build essentials and download utilities
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -32,7 +33,9 @@ RUN alyac build src/main.alya -o /build/alya-vpn-server
 # ==============================================================================
 # Production Runtime Container
 # ==============================================================================
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
 
 # C runtime and netcat for healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
