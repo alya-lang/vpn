@@ -17,7 +17,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Alya Compiler (alyac)
-RUN curl -fsSL "https://github.com/alya-lang/alya/releases/download/v${ALYA_VERSION}/alyac-v${ALYA_VERSION}-x86_64-linux.tar.gz" | tar -xz -C /usr/local/bin \
+RUN curl -fsSL "https://github.com/alya-lang/alya/releases/download/v${ALYA_VERSION}/alyac-v${ALYA_VERSION}-x86_64-linux.tar.gz" | tar -xz --strip-components=1 -C /usr/local/bin \
     && chmod +x /usr/local/bin/alyac \
     && alyac --version
 
@@ -34,10 +34,11 @@ RUN alyac build src/main.alya -o /build/alya-vpn-server
 # ==============================================================================
 FROM debian:bookworm-slim
 
-# GCC and standard C library for C runtime links
+# C runtime and netcat for healthcheck
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libc6 \
+    netcat-traditional \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
