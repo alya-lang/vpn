@@ -138,7 +138,7 @@ docker compose logs -f
 alyac run src/main.alya -- server
 ```
 *Options:*
-- `--port <number>`: Override bind port (default: `8443`).
+- `--port <number>`: Override bind port (default: `51820`).
 - `--key <passphrase>`: Specify authentication passphrase.
 
 ### 2. Run the Client (on local machine)
@@ -147,7 +147,7 @@ alyac run src/main.alya -- server
 alyac run src/main.alya -- client
 ```
 *Options:*
-- `--server <host:port>`: VPN server endpoint (default: `127.0.0.1:8443`).
+- `--server <host:port>`: VPN server endpoint (default: `127.0.0.1:51820`).
 - `--local-port <port>`: Local SOCKS5 listen port (default: `1080`).
 - `--mode <all|include|exclude>`: Split tunneling mode.
 - `--apps <app1,app2,...>`: Comma-separated application filters.

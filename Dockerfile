@@ -46,8 +46,8 @@ WORKDIR /app
 COPY --from=builder /build/alya-vpn-server /app/alya-vpn-server
 COPY --from=builder /build/config/server.toml /app/config/server.toml
 
-# Expose default VPN tunnel port
-EXPOSE 8443
+# Expose default VPN tunnel port (51820)
+EXPOSE 51820
 
 # Mark configuration directory as mountable volume
 VOLUME ["/app/config"]
