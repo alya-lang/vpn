@@ -119,6 +119,21 @@ Any frame with an invalid Poly1305 MAC tag or invalid header is immediately drop
 
 ### 1. Run the VPN Server (on VPS)
 
+#### Option A: Using Docker & Docker Compose (Recommended)
+
+Run the headless server instantly in a lightweight container:
+
+```bash
+# Clone and start with Docker Compose
+docker compose up -d --build
+```
+To view logs:
+```bash
+docker compose logs -f
+```
+
+#### Option B: Using Alya CLI (`alyac`) directly
+
 ```bash
 alyac run src/main.alya -- server
 ```
