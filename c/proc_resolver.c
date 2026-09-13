@@ -630,8 +630,8 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
                 int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
                 if (s == sizeof(si)) {
                     if (si.psi.soi_kind == SOCKINFO_TCP) {
-                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_ini.insi_lport);
-                        int fport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_ini.insi_fport);
+                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_is.insi_lport);
+                        int fport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_is.insi_fport);
                         if (lport == peer_remote_port && fport == proxy_local_port) {
                             char name_buf[256];
                             if (proc_name(pid, name_buf, sizeof(name_buf)) > 0) {
@@ -691,7 +691,7 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
                 int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
                 if (s == sizeof(si)) {
                     if (si.psi.soi_kind == SOCKINFO_TCP) {
-                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_ini.insi_lport);
+                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_is.insi_lport);
                         if (lport == local_port) {
                             char name_buf[256];
                             if (proc_name(pid, name_buf, sizeof(name_buf)) > 0) {
@@ -1742,9 +1742,6 @@ int alya_vpn_pump_server_vpn(int client_sock) {
             continue;
         }
 
-        uint8_t type = s_srv_rx[3];
-        uint32_t ch_id = ((uint32_t)s_srv_rx[4] << 24) | ((uint32_t)s_srv_rx[5] << 16) |
-                         ((uint32_t)s_srv_rx[6] << 8)  | (uint32_t)s_srv_rx[7];
         uint32_t payload_len = ((uint32_t)s_srv_rx[8] << 24) | ((uint32_t)s_srv_rx[9] << 16) |
                                ((uint32_t)s_srv_rx[10] << 8) | (uint32_t)s_srv_rx[11];
 
