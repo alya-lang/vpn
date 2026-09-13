@@ -5,6 +5,8 @@ server_port = 51821
 local_proxy_port = 1080
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
+crypto_threads = 1
+io_threads = 2
 
 [split_tunnel]
 # Modes:
