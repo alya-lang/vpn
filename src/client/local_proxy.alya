@@ -26,18 +26,17 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
     alya_vpn_set_session_passphrase(passphrase)
     let session_key = crypto::vpn_derive_key(passphrase)
 
-    # 2. Build comma-separated apps string and initialize native routing engine in C
-    let apps_csv = ""
+    # 2. Initialize native routing engine: set mode, then add each app individually.
+    # NOTE: Alya array elements in string concatenation context are converted to their
+    # pointer address as decimal (Alya runtime bug). Passing them directly as C FFI
+    # str arguments works correctly — the pointer is passed as char* to C.
+    alya_vpn_set_routing(split_mode, "")
     let app_cnt = len(split_apps)
     let ai = 0
     while ai < app_cnt
-        if ai > 0
-            apps_csv += ","
-        end
-        apps_csv += split_apps[ai]
+        alya_vpn_add_routing_app(split_apps[ai])
         ai += 1
     end
-    alya_vpn_set_routing(split_mode, apps_csv)
 
     # 3. Clear native channel tables
     alya_vpn_ch_clear()
@@ -92,7 +91,7 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
 
                 let ok, host, port = parse_socks5_request(app_sock)
                 if ok == 1
-                    if route_vpn == 1
+                    if route_vpn != 0
                         say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Channel " + next_channel_id + ")")
                         let req_payload = proto::pack_connect_req_payload(next_channel_id, proto::proto_tcp(), host, port)
                         let req_frame = proto::pack_frame(session_key, proto::msg_connect_req(), req_payload)

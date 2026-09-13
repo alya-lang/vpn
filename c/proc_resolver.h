@@ -36,6 +36,10 @@ int alya_vpn_sock_send_hex(int sock, const char *hex_str, int hex_len);
 // apps_csv: comma-separated app names or patterns (e.g. "chrome.exe,curl.exe,discord")
 void alya_vpn_set_routing(int mode, const char *apps_csv);
 
+// Adds a single app name to the routing list.
+// Use this instead of building a CSV in Alya to avoid array-element pointer-address bug.
+void alya_vpn_add_routing_app(const char *app_name);
+
 // Resolves process from local peer port and determines whether it should route via VPN.
 // Fills out_proc_name with the resolved process name.
 // Returns 1 (route via VPN tunnel) or 0 (direct connection / bypass).

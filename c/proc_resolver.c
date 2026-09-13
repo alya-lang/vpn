@@ -539,6 +539,17 @@ void alya_vpn_set_routing(int mode, const char *apps_csv) {
     }
 }
 
+// Adds a single app name to the routing list (avoids Alya string concat bug
+// where array elements are converted to their pointer address in decimal).
+void alya_vpn_add_routing_app(const char *app_name) {
+    if (!app_name || !app_name[0] || s_split_app_count >= 128) return;
+    size_t len = strlen(app_name);
+    if (len == 0 || len >= 64) return;
+    strncpy(s_split_apps[s_split_app_count], app_name, 63);
+    s_split_apps[s_split_app_count][63] = '\0';
+    s_split_app_count++;
+}
+
 int alya_vpn_should_route(const char *proc_name) {
     if (s_split_mode == 0) return 1; // route all
 
@@ -571,6 +582,8 @@ int alya_vpn_check_peer_route(int peer_port, char *out_proc_name, int max_len) {
     }
     return alya_vpn_should_route(out_proc_name);
 }
+
+
 
 // ============================================================================
 // Native Channel & Direct Connection Tables (O(1) lookup, 0 heap allocations)

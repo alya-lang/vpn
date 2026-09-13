@@ -23,6 +23,7 @@ extern "C"
 
     # Native Routing Engine (immune to string buffer wrap-around)
     function alya_vpn_set_routing(mode: i32, apps_csv: str) -> void
+    function alya_vpn_add_routing_app(app_name: str) -> void
     function alya_vpn_check_peer_route(peer_port: i32, out_proc_name: ptr, max_len: i32) -> i32
     function alya_vpn_should_route(proc_name: str) -> i32
 
