@@ -2078,6 +2078,77 @@ static void vpn_posix_sig_handler(int sig) {
 void alya_vpn_set_system_proxy(int enable, int port) {
     macos_set_service_proxy("Wi-Fi", enable, port);
     macos_set_service_proxy("Ethernet", enable, port);
+
+    // Resolve active GUI user UID (if running under sudo)
+    const char *sudo_uid = getenv("SUDO_UID");
+    char uid_buf[32] = "";
+    if (sudo_uid && strlen(sudo_uid) > 0) {
+        snprintf(uid_buf, sizeof(uid_buf), "%s", sudo_uid);
+    } else {
+        const char *sudo_user = getenv("SUDO_USER");
+        if (sudo_user && strlen(sudo_user) > 0) {
+            FILE *fp = popen("id -u \"$SUDO_USER\" 2>/dev/null", "r");
+            if (fp) {
+                if (fgets(uid_buf, sizeof(uid_buf), fp)) {
+                    char *nl = strchr(uid_buf, '\n');
+                    if (nl) *nl = '\0';
+                }
+                pclose(fp);
+            }
+        }
+    }
+
+    char cmd[512];
+    if (enable) {
+        if (uid_buf[0] != '\0') {
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl setenv http_proxy http://127.0.0.1:%d >/dev/null 2>&1", uid_buf, port);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl setenv https_proxy http://127.0.0.1:%d >/dev/null 2>&1", uid_buf, port);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl setenv all_proxy socks5://127.0.0.1:%d >/dev/null 2>&1", uid_buf, port);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl setenv HTTP_PROXY http://127.0.0.1:%d >/dev/null 2>&1", uid_buf, port);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl setenv HTTPS_PROXY http://127.0.0.1:%d >/dev/null 2>&1", uid_buf, port);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl setenv ALL_PROXY socks5://127.0.0.1:%d >/dev/null 2>&1", uid_buf, port);
+            system(cmd);
+        }
+        snprintf(cmd, sizeof(cmd), "launchctl setenv http_proxy http://127.0.0.1:%d >/dev/null 2>&1", port);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "launchctl setenv https_proxy http://127.0.0.1:%d >/dev/null 2>&1", port);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "launchctl setenv all_proxy socks5://127.0.0.1:%d >/dev/null 2>&1", port);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "launchctl setenv HTTP_PROXY http://127.0.0.1:%d >/dev/null 2>&1", port);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "launchctl setenv HTTPS_PROXY http://127.0.0.1:%d >/dev/null 2>&1", port);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "launchctl setenv ALL_PROXY socks5://127.0.0.1:%d >/dev/null 2>&1", port);
+        system(cmd);
+    } else {
+        if (uid_buf[0] != '\0') {
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl unsetenv http_proxy >/dev/null 2>&1", uid_buf);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl unsetenv https_proxy >/dev/null 2>&1", uid_buf);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl unsetenv all_proxy >/dev/null 2>&1", uid_buf);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl unsetenv HTTP_PROXY >/dev/null 2>&1", uid_buf);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl unsetenv HTTPS_PROXY >/dev/null 2>&1", uid_buf);
+            system(cmd);
+            snprintf(cmd, sizeof(cmd), "launchctl asuser %s launchctl unsetenv ALL_PROXY >/dev/null 2>&1", uid_buf);
+            system(cmd);
+        }
+        system("launchctl unsetenv http_proxy >/dev/null 2>&1");
+        system("launchctl unsetenv https_proxy >/dev/null 2>&1");
+        system("launchctl unsetenv all_proxy >/dev/null 2>&1");
+        system("launchctl unsetenv HTTP_PROXY >/dev/null 2>&1");
+        system("launchctl unsetenv HTTPS_PROXY >/dev/null 2>&1");
+        system("launchctl unsetenv ALL_PROXY >/dev/null 2>&1");
+    }
+
     s_mac_proxy_active = enable ? 1 : 0;
 }
 
