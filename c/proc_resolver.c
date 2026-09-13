@@ -1943,6 +1943,21 @@ int alya_vpn_pump_server_vpn(int client_sock) {
 }
 
 // ============================================================================
+// Stop Request & Signal Management (Cross-platform)
+// ============================================================================
+
+static volatile int s_stop_requested = 0;
+static volatile int s_sig_count = 0;
+
+int alya_vpn_is_stop_requested(void) {
+    return s_stop_requested;
+}
+
+void alya_vpn_request_stop(void) {
+    s_stop_requested = 1;
+}
+
+// ============================================================================
 // Windows System-Wide Proxy Management
 // ============================================================================
 
@@ -1993,9 +2008,13 @@ static void vpn_cleanup_on_exit(void) {
 
 static BOOL WINAPI vpn_console_ctrl_handler(DWORD ctrl_type) {
     if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT || ctrl_type == CTRL_CLOSE_EVENT) {
-        if (s_system_proxy_active) {
-            alya_vpn_set_system_proxy(0, 0);
+        s_stop_requested = 1;
+        s_sig_count++;
+        if (s_sig_count > 1 || ctrl_type == CTRL_CLOSE_EVENT) {
+            vpn_cleanup_on_exit();
+            return FALSE;
         }
+        return TRUE;
     }
     return FALSE;
 }
@@ -2048,8 +2067,12 @@ static void vpn_mac_cleanup_on_exit(void) {
 
 static void vpn_posix_sig_handler(int sig) {
     (void)sig;
-    vpn_mac_cleanup_on_exit();
-    _exit(0);
+    s_stop_requested = 1;
+    s_sig_count++;
+    if (s_sig_count > 1) {
+        vpn_mac_cleanup_on_exit();
+        _exit(0);
+    }
 }
 
 void alya_vpn_set_system_proxy(int enable, int port) {
@@ -2064,8 +2087,12 @@ void alya_vpn_init_system_proxy_hook(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = vpn_posix_sig_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
+    sigaction(SIGQUIT, &sa, NULL);
 }
 
 #elif defined(__linux__)
@@ -2080,8 +2107,12 @@ static void vpn_linux_cleanup_on_exit(void) {
 
 static void vpn_posix_sig_handler(int sig) {
     (void)sig;
-    vpn_linux_cleanup_on_exit();
-    _exit(0);
+    s_stop_requested = 1;
+    s_sig_count++;
+    if (s_sig_count > 1) {
+        vpn_linux_cleanup_on_exit();
+        _exit(0);
+    }
 }
 
 void alya_vpn_set_system_proxy(int enable, int port) {
@@ -2112,8 +2143,12 @@ void alya_vpn_init_system_proxy_hook(void) {
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = vpn_posix_sig_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGHUP, &sa, NULL);
+    sigaction(SIGQUIT, &sa, NULL);
 }
 
 #else

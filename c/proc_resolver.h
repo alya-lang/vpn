@@ -124,6 +124,8 @@ void alya_vpn_set_system_proxy(int enable, int port);
 
 // Hooks OS console events (Ctrl+C, close) to cleanly disable system proxy on exit
 void alya_vpn_init_system_proxy_hook(void);
+int alya_vpn_is_stop_requested(void);
+void alya_vpn_request_stop(void);
 
 
 

@@ -72,6 +72,8 @@ extern "C"
     function alya_vpn_pump_server_vpn(client_sock: i32) -> i32
     function alya_vpn_set_system_proxy(enable: i32, port: i32) -> void
     function alya_vpn_init_system_proxy_hook() -> void
+    function alya_vpn_is_stop_requested() -> i32
+    function alya_vpn_request_stop() -> void
 
     # ============================================================================
     # Thread Pool API

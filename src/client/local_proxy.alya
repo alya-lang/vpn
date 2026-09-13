@@ -91,8 +91,9 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
     end
     say("[INFO] Encrypted VPN tunnel established successfully!")
 
+    alya_vpn_init_system_proxy_hook()
+
     if auto_sys_proxy == 1
-        alya_vpn_init_system_proxy_hook()
         alya_vpn_set_system_proxy(1, local_port)
         say("[INFO] System Proxy automatically configured (127.0.0.1:" + local_port + ")")
     end
@@ -103,6 +104,11 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
     let next_channel_id = 1
 
     while 1
+        if alya_vpn_is_stop_requested() == 1
+            say("\n[INFO] Shutdown signal received. Restoring system proxy and DNS...")
+            break
+        end
+
         let activity = 0
 
         # 1. Accept new local SOCKS5 connections (non-blocking)
