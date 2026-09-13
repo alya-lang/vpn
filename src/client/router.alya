@@ -29,6 +29,20 @@ function pattern_match(pattern, text)
     if (t + ".exe") == p
         return 1
     end
+    # Prefix match with delimiter (e.g. "Discord" or "Discord.exe" matches "Discord Helper", "Discord-Worker")
+    let base_p = p
+    if len(base_p) > 4 and base_p.substring(len(base_p) - 4, 4) == ".exe"
+        base_p = base_p.substring(0, len(base_p) - 4)
+    end
+    let blen = len(base_p)
+    if blen > 0 and tlen > blen
+        if t.substring(0, blen) == base_p
+            let delim = char_at(t, blen)
+            if delim == " " or delim == "-" or delim == "_" or delim == "."
+                return 1
+            end
+        end
+    end
 
     # Wildcard match: *substring*
     let has_prefix_star = char_at(p, 0) == "*"

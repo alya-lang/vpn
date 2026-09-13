@@ -38,19 +38,32 @@ function print_usage()
     say("  benchmark                   Run ChaCha20-Poly1305 encryption benchmark\n")
 end
 
-# Strips whitespace and quotes from string
+# Trims whitespace and quotes from start and end of string (preserves spaces inside)
 function strip_val(s)
-    let res = ""
     let slen = len(s)
-    let i = 0
-    while i < slen
-        let ch = char_at(s, i)
-        if ch != " " and ch != "\t" and ch != "\"" and ch != "\r" and ch != "\n"
-            res += ch
-        end
-        i += 1
+    if slen == 0
+        return ""
     end
-    return res
+    let start = 0
+    while start < slen
+        let ch = char_at(s, start)
+        if ch != " " and ch != "\t" and ch != "\"" and ch != "'" and ch != "\r" and ch != "\n"
+            break
+        end
+        start += 1
+    end
+    let end_idx = slen - 1
+    while end_idx >= start
+        let ch = char_at(s, end_idx)
+        if ch != " " and ch != "\t" and ch != "\"" and ch != "'" and ch != "\r" and ch != "\n" and ch != ","
+            break
+        end
+        end_idx -= 1
+    end
+    if start > end_idx
+        return ""
+    end
+    return s.substring(start, end_idx - start + 1)
 end
 
 # Loads client configuration from config/client.toml
@@ -95,20 +108,47 @@ function load_client_config(config_path)
                 cfg["system_proxy"] = strip_val(val)
             else if key == "apps"
                 in_apps = 1
-                if proto::find_char(val, "]") >= 0
+                let bracket_open = proto::find_char(val, "[")
+                let bracket_close = proto::find_char(val, "]")
+                if bracket_open >= 0 and bracket_close > bracket_open
+                    let inside = val.substring(bracket_open + 1, bracket_close - bracket_open - 1)
+                    let items = proto::split_string(inside, ",")
+                    let k = 0
+                    while k < len(items)
+                        let it = strip_val(items[k])
+                        if len(it) > 0
+                            cfg["apps"].push(it)
+                        end
+                        k += 1
+                    end
+                    in_apps = 0
+                else if proto::find_char(val, "]") >= 0
                     in_apps = 0
                 end
             end
         else if in_apps == 1
             if proto::find_char(line, "]") >= 0
+                let bracket_idx = proto::find_char(line, "]")
+                let before_bracket = line.substring(0, bracket_idx)
+                let items = proto::split_string(before_bracket, ",")
+                let k = 0
+                while k < len(items)
+                    let it = strip_val(items[k])
+                    if len(it) > 0
+                        cfg["apps"].push(it)
+                    end
+                    k += 1
+                end
                 in_apps = 0
             else
-                let app_clean = strip_val(line)
-                if len(app_clean) > 0 and char_at(app_clean, len(app_clean) - 1) == ","
-                    app_clean = app_clean.substring(0, len(app_clean) - 1)
-                end
-                if len(app_clean) > 0
-                    cfg["apps"].push(app_clean)
+                let items = proto::split_string(line, ",")
+                let k = 0
+                while k < len(items)
+                    let it = strip_val(items[k])
+                    if len(it) > 0
+                        cfg["apps"].push(it)
+                    end
+                    k += 1
                 end
             end
         end
@@ -256,7 +296,17 @@ function main()
                 end
                 i += 2
             else if args_list[i] == "--apps" and i + 1 < len(args_list)
-                app_list = proto::split_string(args_list[i + 1], ",")
+                let raw_apps = proto::split_string(args_list[i + 1], ",")
+                let clean_apps = []
+                let k = 0
+                while k < len(raw_apps)
+                    let it = strip_val(raw_apps[k])
+                    if len(it) > 0
+                        clean_apps.push(it)
+                    end
+                    k += 1
+                end
+                app_list = clean_apps
                 i += 2
             else if args_list[i] == "--no-system-proxy" or args_list[i] == "--no-proxy"
                 auto_sys_proxy = 0

@@ -47,6 +47,14 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
         ai += 1
     end
 
+    let mode_desc = "ALL (route all traffic via VPN)"
+    if split_mode == 1
+        mode_desc = "INCLUDE / Whitelist (" + app_cnt + " apps configured)"
+    else if split_mode == 2
+        mode_desc = "EXCLUDE / Blacklist (" + app_cnt + " apps configured)"
+    end
+    say("[INFO] Split-Tunneling: " + mode_desc)
+
     # 4. Clear native channel tables
     alya_vpn_ch_clear()
     alya_vpn_direct_clear()
@@ -86,7 +94,7 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
     if auto_sys_proxy == 1
         alya_vpn_init_system_proxy_hook()
         alya_vpn_set_system_proxy(1, local_port)
-        say("[INFO] Windows System Proxy automatically configured (127.0.0.1:" + local_port + ")")
+        say("[INFO] System Proxy automatically configured (127.0.0.1:" + local_port + ")")
     end
 
     # Assign VPN socket to I/O worker 0 for dedicated handling
@@ -171,7 +179,7 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
 
     if auto_sys_proxy == 1
         alya_vpn_set_system_proxy(0, 0)
-        say("[INFO] Windows System Proxy restored.")
+        say("[INFO] System Proxy restored.")
     end
     return 0
 end

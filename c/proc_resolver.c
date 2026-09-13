@@ -47,6 +47,9 @@
 static void __attribute__((constructor)) init_unbuffered_io(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
+#if !defined(_WIN32)
+    signal(SIGPIPE, SIG_IGN);
+#endif
 }
 #endif
 
@@ -949,9 +952,24 @@ static int pattern_match_c(const char *pattern, const char *text) {
     snprintf(buf, sizeof(buf), "%s.exe", text);
     if (ALYA_STRICMP(pattern, buf) == 0) return 1;
 
-    // Wildcard match: *substring*, *suffix, prefix*
     size_t plen = strlen(pattern);
     size_t tlen = strlen(text);
+
+    // Prefix match with delimiter (e.g. "Discord" or "Discord.exe" matches "Discord Helper", "Discord-Worker")
+    char base[128];
+    strncpy(base, pattern, sizeof(base) - 1);
+    base[sizeof(base) - 1] = '\0';
+    size_t blen = strlen(base);
+    if (blen > 4 && ALYA_STRICMP(base + blen - 4, ".exe") == 0) {
+        base[blen - 4] = '\0';
+        blen -= 4;
+    }
+    if (blen > 0 && tlen > blen && ALYA_STRNICMP(base, text, blen) == 0) {
+        char delim = text[blen];
+        if (delim == ' ' || delim == '-' || delim == '_' || delim == '.') {
+            return 1;
+        }
+    }
     if (plen >= 2 && pattern[0] == '*' && pattern[plen - 1] == '*') {
         char inner[128];
         size_t ilen = plen - 2;
@@ -1110,6 +1128,10 @@ static void set_sock_nonblocking(int sock) {
 #else
     int flags = fcntl(sock, F_GETFL, 0);
     if (flags != -1) fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#if defined(SO_NOSIGPIPE)
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+#endif
 #endif
 }
 
@@ -1169,6 +1191,10 @@ static int connect_target(const char *host, int port) {
     for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
         int s = (int)socket(p->ai_family, p->ai_socktype, p->ai_protocol);
         if (s < 0) continue;
+#if defined(SO_NOSIGPIPE)
+        int opt = 1;
+        setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+#endif
 
         if (connect((SOCKET)s, p->ai_addr, (int)p->ai_addrlen) == 0) {
             target_sock = s;
@@ -1296,45 +1322,43 @@ int alya_vpn_pump_direct(void) {
         if (n1 > 0) {
             activity = 1;
             int sent = 0;
+            int send_err = 0;
             while (sent < n1) {
                 int s = send((SOCKET)d_sock, buf + sent, n1 - sent, 0);
-                if (s <= 0) break;
-                sent += s;
+                if (s > 0) {
+                    sent += s;
+                } else {
+                    if (s < 0 && !is_would_block()) {
+                        send_err = 1;
+                    }
+                    break;
+                }
+            }
+            if (send_err) {
+                close_sock(a_sock);
+                close_sock(d_sock);
+                s_client_directs[i].in_use = 0;
+                s_client_directs[i].app_sock = -1;
+                s_client_directs[i].dest_sock = -1;
+                continue;
             }
         } else if (n1 == 0) {
             // EOF: client closed
-#if defined(_WIN32)
-            closesocket((SOCKET)a_sock);
-            closesocket((SOCKET)d_sock);
-#else
-            close(a_sock);
-            close(d_sock);
-#endif
+            close_sock(a_sock);
+            close_sock(d_sock);
             s_client_directs[i].in_use = 0;
             s_client_directs[i].app_sock = -1;
             s_client_directs[i].dest_sock = -1;
             continue;
         } else {
-#if defined(_WIN32)
-            int err = WSAGetLastError();
-            if (err != WSAEWOULDBLOCK) {
-                closesocket((SOCKET)a_sock);
-                closesocket((SOCKET)d_sock);
+            if (!is_would_block()) {
+                close_sock(a_sock);
+                close_sock(d_sock);
                 s_client_directs[i].in_use = 0;
                 s_client_directs[i].app_sock = -1;
                 s_client_directs[i].dest_sock = -1;
                 continue;
             }
-#else
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                close(a_sock);
-                close(d_sock);
-                s_client_directs[i].in_use = 0;
-                s_client_directs[i].app_sock = -1;
-                s_client_directs[i].dest_sock = -1;
-                continue;
-            }
-#endif
         }
 
         // 2. Destination -> App
@@ -1342,42 +1366,41 @@ int alya_vpn_pump_direct(void) {
         if (n2 > 0) {
             activity = 1;
             int sent = 0;
+            int send_err = 0;
             while (sent < n2) {
                 int s = send((SOCKET)a_sock, buf + sent, n2 - sent, 0);
-                if (s <= 0) break;
-                sent += s;
+                if (s > 0) {
+                    sent += s;
+                } else {
+                    if (s < 0 && !is_would_block()) {
+                        send_err = 1;
+                    }
+                    break;
+                }
+            }
+            if (send_err) {
+                close_sock(a_sock);
+                close_sock(d_sock);
+                s_client_directs[i].in_use = 0;
+                s_client_directs[i].app_sock = -1;
+                s_client_directs[i].dest_sock = -1;
+                continue;
             }
         } else if (n2 == 0) {
             // EOF: destination closed
-#if defined(_WIN32)
-            closesocket((SOCKET)a_sock);
-            closesocket((SOCKET)d_sock);
-#else
-            close(a_sock);
-            close(d_sock);
-#endif
+            close_sock(a_sock);
+            close_sock(d_sock);
             s_client_directs[i].in_use = 0;
             s_client_directs[i].app_sock = -1;
             s_client_directs[i].dest_sock = -1;
         } else {
-#if defined(_WIN32)
-            int err = WSAGetLastError();
-            if (err != WSAEWOULDBLOCK) {
-                closesocket((SOCKET)a_sock);
-                closesocket((SOCKET)d_sock);
+            if (!is_would_block()) {
+                close_sock(a_sock);
+                close_sock(d_sock);
                 s_client_directs[i].in_use = 0;
                 s_client_directs[i].app_sock = -1;
                 s_client_directs[i].dest_sock = -1;
             }
-#else
-            if (errno != EAGAIN && errno != EWOULDBLOCK) {
-                close(a_sock);
-                close(d_sock);
-                s_client_directs[i].in_use = 0;
-                s_client_directs[i].app_sock = -1;
-                s_client_directs[i].dest_sock = -1;
-            }
-#endif
         }
     }
 
@@ -1966,6 +1989,30 @@ void alya_vpn_init_system_proxy_hook(void) {
 
 static int s_mac_proxy_active = 0;
 
+static void macos_set_service_proxy(const char *service, int enable, int port) {
+    char cmd[256];
+    if (enable) {
+        snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxy \"%s\" 127.0.0.1 %d >/dev/null 2>&1", service, port);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxystate \"%s\" on >/dev/null 2>&1", service);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "networksetup -setwebproxy \"%s\" 127.0.0.1 %d >/dev/null 2>&1", service, port);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "networksetup -setwebproxystate \"%s\" on >/dev/null 2>&1", service);
+        snprintf(cmd, sizeof(cmd), "networksetup -setsecurewebproxy \"%s\" 127.0.0.1 %d >/dev/null 2>&1", service, port);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "networksetup -setsecurewebproxystate \"%s\" on >/dev/null 2>&1", service);
+        system(cmd);
+    } else {
+        snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxystate \"%s\" off >/dev/null 2>&1", service);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "networksetup -setwebproxystate \"%s\" off >/dev/null 2>&1", service);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "networksetup -setsecurewebproxystate \"%s\" off >/dev/null 2>&1", service);
+        system(cmd);
+    }
+}
+
 static void vpn_mac_cleanup_on_exit(void) {
     if (s_mac_proxy_active) {
         alya_vpn_set_system_proxy(0, 0);
@@ -1979,35 +2026,13 @@ static void vpn_posix_sig_handler(int sig) {
 }
 
 void alya_vpn_set_system_proxy(int enable, int port) {
-    if (enable) {
-        char cmd[256];
-        // SOCKS5 proxy on Wi-Fi and Ethernet
-        snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxy \"Wi-Fi\" 127.0.0.1 %d 2>/dev/null", port);
-        system(cmd);
-        system("networksetup -setsocksfirewallproxystate \"Wi-Fi\" on 2>/dev/null");
-        snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxy \"Ethernet\" 127.0.0.1 %d 2>/dev/null", port);
-        system(cmd);
-        system("networksetup -setsocksfirewallproxystate \"Ethernet\" on 2>/dev/null");
-
-        // HTTP/HTTPS proxy
-        snprintf(cmd, sizeof(cmd), "networksetup -setwebproxy \"Wi-Fi\" 127.0.0.1 %d 2>/dev/null", port);
-        system(cmd);
-        system("networksetup -setwebproxystate \"Wi-Fi\" on 2>/dev/null");
-        snprintf(cmd, sizeof(cmd), "networksetup -setsecurewebproxy \"Wi-Fi\" 127.0.0.1 %d 2>/dev/null", port);
-        system(cmd);
-        system("networksetup -setsecurewebproxystate \"Wi-Fi\" on 2>/dev/null");
-
-        s_mac_proxy_active = 1;
-    } else {
-        system("networksetup -setsocksfirewallproxystate \"Wi-Fi\" off 2>/dev/null");
-        system("networksetup -setsocksfirewallproxystate \"Ethernet\" off 2>/dev/null");
-        system("networksetup -setwebproxystate \"Wi-Fi\" off 2>/dev/null");
-        system("networksetup -setsecurewebproxystate \"Wi-Fi\" off 2>/dev/null");
-        s_mac_proxy_active = 0;
-    }
+    macos_set_service_proxy("Wi-Fi", enable, port);
+    macos_set_service_proxy("Ethernet", enable, port);
+    s_mac_proxy_active = enable ? 1 : 0;
 }
 
 void alya_vpn_init_system_proxy_hook(void) {
+    signal(SIGPIPE, SIG_IGN);
     atexit(vpn_mac_cleanup_on_exit);
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -2036,25 +2061,26 @@ void alya_vpn_set_system_proxy(int enable, int port) {
     if (enable) {
         char cmd[256];
         // GNOME / Ubuntu / Debian desktop proxy
-        system("gsettings set org.gnome.system.proxy mode 'manual' 2>/dev/null");
-        system("gsettings set org.gnome.system.proxy.socks host '127.0.0.1' 2>/dev/null");
-        snprintf(cmd, sizeof(cmd), "gsettings set org.gnome.system.proxy.socks port %d 2>/dev/null", port);
+        system("gsettings set org.gnome.system.proxy mode 'manual' >/dev/null 2>&1");
+        system("gsettings set org.gnome.system.proxy.socks host '127.0.0.1' >/dev/null 2>&1");
+        snprintf(cmd, sizeof(cmd), "gsettings set org.gnome.system.proxy.socks port %d >/dev/null 2>&1", port);
         system(cmd);
-        system("gsettings set org.gnome.system.proxy.http host '127.0.0.1' 2>/dev/null");
-        snprintf(cmd, sizeof(cmd), "gsettings set org.gnome.system.proxy.http port %d 2>/dev/null", port);
+        system("gsettings set org.gnome.system.proxy.http host '127.0.0.1' >/dev/null 2>&1");
+        snprintf(cmd, sizeof(cmd), "gsettings set org.gnome.system.proxy.http port %d >/dev/null 2>&1", port);
         system(cmd);
-        system("gsettings set org.gnome.system.proxy.https host '127.0.0.1' 2>/dev/null");
-        snprintf(cmd, sizeof(cmd), "gsettings set org.gnome.system.proxy.https port %d 2>/dev/null", port);
+        system("gsettings set org.gnome.system.proxy.https host '127.0.0.1' >/dev/null 2>&1");
+        snprintf(cmd, sizeof(cmd), "gsettings set org.gnome.system.proxy.https port %d >/dev/null 2>&1", port);
         system(cmd);
 
         s_linux_proxy_active = 1;
     } else {
-        system("gsettings set org.gnome.system.proxy mode 'none' 2>/dev/null");
+        system("gsettings set org.gnome.system.proxy mode 'none' >/dev/null 2>&1");
         s_linux_proxy_active = 0;
     }
 }
 
 void alya_vpn_init_system_proxy_hook(void) {
+    signal(SIGPIPE, SIG_IGN);
     atexit(vpn_linux_cleanup_on_exit);
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));

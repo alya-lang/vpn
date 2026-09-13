@@ -12,7 +12,15 @@ function main()
     runner_assert_eq(r, router::pattern_match("chrome", "chrome.exe"), 1, "chrome should match chrome.exe")
     runner_assert_eq(r, router::pattern_match("chrome", "firefox.exe"), 0, "chrome should not match firefox.exe")
 
-    # 2. Wildcard pattern matching
+    # 2. Helper / child process matching
+    runner_assert_eq(r, router::pattern_match("Discord", "Discord Helper"), 1, "Discord should match Discord Helper")
+    runner_assert_eq(r, router::pattern_match("discord", "Discord Helper"), 1, "discord should match Discord Helper")
+    runner_assert_eq(r, router::pattern_match("Discord.exe", "Discord Helper"), 1, "Discord.exe should match Discord Helper")
+    runner_assert_eq(r, router::pattern_match("Discord Helper", "Discord Helper (Renderer)"), 1, "Discord Helper should match renderer")
+    runner_assert_eq(r, router::pattern_match("Discord Helper", "Discord Helper"), 1, "exact Discord Helper match")
+    runner_assert_eq(r, router::pattern_match("disc", "discover"), 0, "disc should not match discover")
+
+    # 3. Wildcard pattern matching
     runner_assert_eq(r, router::pattern_match("steam*", "steamwebhelper.exe"), 1, "steam* should match steamwebhelper.exe")
     runner_assert_eq(r, router::pattern_match("*cord.exe", "discord.exe"), 1, "*cord.exe should match discord.exe")
     runner_assert_eq(r, router::pattern_match("*riot*", "RiotClientServices.exe"), 1, "*riot* should match RiotClientServices.exe")
