@@ -238,18 +238,32 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
     int found = 0;
 
     // --- IPv4 lookup ---
+    // Note: From the client app's perspective (e.g. Chrome/curl connecting to proxy):
+    // client_socket.dwLocalPort == peer_remote_port (ephemeral port)
+    // client_socket.dwRemotePort == proxy_local_port (e.g. 1080)
     DWORD size = 0;
     pGetTable(NULL, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
     if (size > 0) {
         ALYA_MIB_TCPTABLE_OWNER_PID *table = (ALYA_MIB_TCPTABLE_OWNER_PID *)malloc(size);
         if (table) {
             if (pGetTable(table, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
+                // Pass 1: Match both client local port (peer_remote_port) and remote port (proxy_local_port)
                 for (DWORD i = 0; i < table->dwNumEntries; ++i) {
-                    if (table->table[i].dwLocalPort == target_local_port_network &&
-                        table->table[i].dwRemotePort == target_remote_port_network) {
+                    if (table->table[i].dwLocalPort == target_remote_port_network &&
+                        table->table[i].dwRemotePort == target_local_port_network) {
                         DWORD pid = table->table[i].dwOwningPid;
                         found = get_process_name_by_pid(pid, out_name, max_len);
                         break;
+                    }
+                }
+                // Pass 2: Fallback to matching just client local port if not found
+                if (!found) {
+                    for (DWORD i = 0; i < table->dwNumEntries; ++i) {
+                        if (table->table[i].dwLocalPort == target_remote_port_network) {
+                            DWORD pid = table->table[i].dwOwningPid;
+                            found = get_process_name_by_pid(pid, out_name, max_len);
+                            break;
+                        }
                     }
                 }
             }
@@ -266,11 +280,20 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
             if (table6) {
                 if (pGetTable(table6, &size6, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
                     for (DWORD i = 0; i < table6->dwNumEntries; ++i) {
-                        if (table6->table[i].dwLocalPort == target_local_port_network &&
-                            table6->table[i].dwRemotePort == target_remote_port_network) {
+                        if (table6->table[i].dwLocalPort == target_remote_port_network &&
+                            table6->table[i].dwRemotePort == target_local_port_network) {
                             DWORD pid = table6->table[i].dwOwningPid;
                             found = get_process_name_by_pid(pid, out_name, max_len);
                             break;
+                        }
+                    }
+                    if (!found) {
+                        for (DWORD i = 0; i < table6->dwNumEntries; ++i) {
+                            if (table6->table[i].dwLocalPort == target_remote_port_network) {
+                                DWORD pid = table6->table[i].dwOwningPid;
+                                found = get_process_name_by_pid(pid, out_name, max_len);
+                                break;
+                            }
                         }
                     }
                 }
@@ -282,6 +305,7 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
     FreeLibrary(hIpHlp);
     return found;
 }
+
 
 
 int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len) {
@@ -449,7 +473,7 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
         // Format: sl local_address:local_port rem_address:rem_port st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode
         if (sscanf(line, "%d: %x:%x %x:%x %*x %*x:%*x %*x:%*x %*x %*d %*d %d",
                    &sl, &local_ip, &local_p, &remote_ip, &remote_p, &inode) >= 5) {
-            if ((int)local_p == proxy_local_port && (int)remote_p == peer_remote_port) {
+            if ((int)local_p == peer_remote_port && (int)remote_p == proxy_local_port) {
                 target_inode = inode;
                 break;
             }
@@ -471,7 +495,7 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
                                &local_ip[0], &local_ip[1], &local_ip[2], &local_ip[3], &local_p,
                                &remote_ip[0], &remote_ip[1], &remote_ip[2], &remote_ip[3], &remote_p,
                                &inode) >= 10) {
-                        if ((int)local_p == proxy_local_port && (int)remote_p == peer_remote_port) {
+                        if ((int)local_p == peer_remote_port && (int)remote_p == proxy_local_port) {
                             target_inode = inode;
                             break;
                         }
@@ -481,6 +505,7 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
             fclose(f);
         }
     }
+
 
     if (target_inode <= 0) return 0;
 
