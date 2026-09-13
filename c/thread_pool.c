@@ -14,7 +14,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
-#include <stdatomic.h>
 #include <time.h>
 
 #if defined(_WIN32)
@@ -44,9 +43,53 @@ typedef pthread_mutex_t AlyaMutex;
 #define THREAD_RETURN_VAL NULL
 #endif
 
-
-// Use proper C11 atomic type for 64-bit counters
-typedef _Atomic uint64_t atomic_u64;
+// ============================================================================
+// Cross-Platform Atomic Operations
+// GCC/Clang built-ins operate on standard pointers without requiring _Atomic type,
+// avoiding Apple Clang type mismatch errors on volatile / standard integer types.
+// ============================================================================
+#if defined(__GNUC__) || defined(__clang__)
+#define alya_atomic_load(ptr, order)           __atomic_load_n((ptr), (order))
+#define alya_atomic_store(ptr, val, order)      __atomic_store_n((ptr), (val), (order))
+#define alya_atomic_fetch_add(ptr, val, order)  __atomic_fetch_add((ptr), (val), (order))
+#define alya_atomic_fetch_sub(ptr, val, order)  __atomic_fetch_sub((ptr), (val), (order))
+#define alya_atomic_init(ptr, val)             __atomic_store_n((ptr), (val), __ATOMIC_RELAXED)
+#define ALYA_ORDER_RELAXED                     __ATOMIC_RELAXED
+#define ALYA_ORDER_ACQUIRE                     __ATOMIC_ACQUIRE
+#define ALYA_ORDER_RELEASE                     __ATOMIC_RELEASE
+#elif defined(_MSC_VER)
+#include <intrin.h>
+#define ALYA_ORDER_RELAXED                     0
+#define ALYA_ORDER_ACQUIRE                     0
+#define ALYA_ORDER_RELEASE                     0
+#define alya_atomic_load(ptr, order)           (*(ptr))
+#define alya_atomic_store(ptr, val, order)      (*(ptr) = (val))
+#define alya_atomic_init(ptr, val)             (*(ptr) = (val))
+static inline int alya_atomic_fetch_add_int(volatile int *ptr, int val) {
+    return (int)_InterlockedExchangeAdd((volatile long *)ptr, (long)val);
+}
+static inline int alya_atomic_fetch_sub_int(volatile int *ptr, int val) {
+    return (int)_InterlockedExchangeAdd((volatile long *)ptr, -(long)val);
+}
+static inline uint64_t alya_atomic_fetch_add_u64(volatile uint64_t *ptr, uint64_t val) {
+    return (uint64_t)_InterlockedExchangeAdd64((volatile long long *)ptr, (long long)val);
+}
+#define alya_atomic_fetch_add(ptr, val, order) \
+    (sizeof(*(ptr)) == 8 ? alya_atomic_fetch_add_u64((volatile uint64_t *)(ptr), (uint64_t)(val)) \
+                         : alya_atomic_fetch_add_int((volatile int *)(ptr), (int)(val)))
+#define alya_atomic_fetch_sub(ptr, val, order) \
+    (sizeof(*(ptr)) == 8 ? alya_atomic_fetch_add_u64((volatile uint64_t *)(ptr), -(long long)(val)) \
+                         : alya_atomic_fetch_sub_int((volatile int *)(ptr), (int)(val)))
+#else
+#define ALYA_ORDER_RELAXED                     0
+#define ALYA_ORDER_ACQUIRE                     0
+#define ALYA_ORDER_RELEASE                     0
+#define alya_atomic_load(ptr, order)           (*(ptr))
+#define alya_atomic_store(ptr, val, order)      (*(ptr) = (val))
+#define alya_atomic_init(ptr, val)             (*(ptr) = (val))
+#define alya_atomic_fetch_add(ptr, val, order) ((*(ptr)) += (val))
+#define alya_atomic_fetch_sub(ptr, val, order) ((*(ptr)) -= (val))
+#endif
 
 // ============================================================================
 // Simple JSON Parser for Work Submission
@@ -172,15 +215,15 @@ static int alya_get_cpu_count(void) {
 void alya_work_queue_init(AlyaWorkQueue *queue, int capacity) {
     queue->items = (AlyaWorkItem *)calloc(capacity, sizeof(AlyaWorkItem));
     queue->capacity = capacity;
-    atomic_init(&queue->head, 0);
-    atomic_init(&queue->tail, 0);
-    atomic_init(&queue->count, 0);
+    alya_atomic_init(&queue->head, 0);
+    alya_atomic_init(&queue->tail, 0);
+    alya_atomic_init(&queue->count, 0);
 }
 
 int alya_work_queue_push(AlyaWorkQueue *queue, AlyaWorkItem *item) {
-    int head = atomic_load_explicit(&queue->head, memory_order_relaxed);
+    int head = alya_atomic_load(&queue->head, ALYA_ORDER_RELAXED);
     int next_head = (head + 1) % queue->capacity;
-    int count = atomic_load_explicit(&queue->count, memory_order_acquire);
+    int count = alya_atomic_load(&queue->count, ALYA_ORDER_ACQUIRE);
 
     if (count >= queue->capacity - 1) {
         return -1; // Queue full
@@ -190,15 +233,15 @@ int alya_work_queue_push(AlyaWorkQueue *queue, AlyaWorkItem *item) {
     queue->items[head] = *item;
 
     // Publish: update head and count
-    atomic_store_explicit(&queue->head, next_head, memory_order_release);
-    atomic_fetch_add_explicit(&queue->count, 1, memory_order_release);
+    alya_atomic_store(&queue->head, next_head, ALYA_ORDER_RELEASE);
+    alya_atomic_fetch_add(&queue->count, 1, ALYA_ORDER_RELEASE);
 
     return 0;
 }
 
 int alya_work_queue_pop(AlyaWorkQueue *queue, AlyaWorkItem *item) {
-    int tail = atomic_load_explicit(&queue->tail, memory_order_relaxed);
-    int count = atomic_load_explicit(&queue->count, memory_order_acquire);
+    int tail = alya_atomic_load(&queue->tail, ALYA_ORDER_RELAXED);
+    int count = alya_atomic_load(&queue->count, ALYA_ORDER_ACQUIRE);
 
     if (count == 0) {
         return -1; // Queue empty
@@ -209,14 +252,14 @@ int alya_work_queue_pop(AlyaWorkQueue *queue, AlyaWorkItem *item) {
 
     // Update tail and count
     int next_tail = (tail + 1) % queue->capacity;
-    atomic_store_explicit(&queue->tail, next_tail, memory_order_release);
-    atomic_fetch_sub_explicit(&queue->count, 1, memory_order_release);
+    alya_atomic_store(&queue->tail, next_tail, ALYA_ORDER_RELEASE);
+    alya_atomic_fetch_sub(&queue->count, 1, ALYA_ORDER_RELEASE);
 
     return 0;
 }
 
 int alya_work_queue_size(AlyaWorkQueue *queue) {
-    return atomic_load_explicit(&queue->count, memory_order_acquire);
+    return alya_atomic_load(&queue->count, ALYA_ORDER_ACQUIRE);
 }
 
 // ============================================================================
@@ -262,7 +305,7 @@ static THREAD_RETURN_TYPE alya_crypto_worker(void *arg) {
                     memcpy(key, session_key, 32);
                 } else {
                     cw->result_code = -2;
-                    atomic_fetch_add_explicit((atomic_u64 *)&pool->crypto_completed, 1, memory_order_relaxed);
+                    alya_atomic_fetch_add(&pool->crypto_completed, 1, ALYA_ORDER_RELAXED);
                     continue;
                 }
 
@@ -270,7 +313,7 @@ static THREAD_RETURN_TYPE alya_crypto_worker(void *arg) {
                 uint8_t *plaintext = alya_vpn_buffer_data(cw->buffer_id);
                 if (!plaintext || cw->payload_len <= 0) {
                     cw->result_code = -2;
-                    atomic_fetch_add_explicit((atomic_u64 *)&pool->crypto_completed, 1, memory_order_relaxed);
+                    alya_atomic_fetch_add(&pool->crypto_completed, 1, ALYA_ORDER_RELAXED);
                     continue;
                 }
 
@@ -322,21 +365,21 @@ static THREAD_RETURN_TYPE alya_crypto_worker(void *arg) {
                     memcpy(key, session_key, 32);
                 } else {
                     cw->result_code = -2;
-                    atomic_fetch_add_explicit((atomic_u64 *)&pool->crypto_completed, 1, memory_order_relaxed);
+                    alya_atomic_fetch_add(&pool->crypto_completed, 1, ALYA_ORDER_RELAXED);
                     continue;
                 }
 
                 uint8_t *frame = alya_vpn_buffer_data(cw->buffer_id);
                 if (!frame || cw->frame_len < 32) {
                     cw->result_code = -2;
-                    atomic_fetch_add_explicit((atomic_u64 *)&pool->crypto_completed, 1, memory_order_relaxed);
+                    alya_atomic_fetch_add(&pool->crypto_completed, 1, ALYA_ORDER_RELAXED);
                     continue;
                 }
 
                 // Verify magic
                 if (frame[0] != 'A' || frame[1] != 'V' || frame[2] != 0x01) {
                     cw->result_code = -2;
-                    atomic_fetch_add_explicit((atomic_u64 *)&pool->crypto_completed, 1, memory_order_relaxed);
+                    alya_atomic_fetch_add(&pool->crypto_completed, 1, ALYA_ORDER_RELAXED);
                     continue;
                 }
 
@@ -348,7 +391,7 @@ static THREAD_RETURN_TYPE alya_crypto_worker(void *arg) {
 
                 if (raw_len < 0 || raw_len > (int)(ALYA_BUFFER_SIZE - 32)) {
                     cw->result_code = -2;
-                    atomic_fetch_add_explicit((atomic_u64 *)&pool->crypto_completed, 1, memory_order_relaxed);
+                    alya_atomic_fetch_add(&pool->crypto_completed, 1, ALYA_ORDER_RELAXED);
                     continue;
                 }
 
@@ -364,7 +407,7 @@ static THREAD_RETURN_TYPE alya_crypto_worker(void *arg) {
                 }
                 if (diff != 0) {
                     cw->result_code = -1; // Auth failed
-                    atomic_fetch_add_explicit((atomic_u64 *)&pool->crypto_completed, 1, memory_order_relaxed);
+                    alya_atomic_fetch_add(&pool->crypto_completed, 1, ALYA_ORDER_RELAXED);
                     continue;
                 }
 
@@ -377,7 +420,7 @@ static THREAD_RETURN_TYPE alya_crypto_worker(void *arg) {
                 cw->result_code = 0;
             }
 
-            atomic_fetch_add_explicit((atomic_u64 *)&pool->crypto_completed, 1, memory_order_relaxed);
+            alya_atomic_fetch_add(&pool->crypto_completed, 1, ALYA_ORDER_RELAXED);
         } else {
             // Queue empty, yield
 #if defined(_WIN32)
@@ -420,7 +463,7 @@ static THREAD_RETURN_TYPE alya_io_worker(void *arg) {
                 iw->result_bytes = (iw->accept_sock >= 0) ? 1 : -1;
             }
 
-            atomic_fetch_add_explicit((atomic_u64 *)&pool->io_completed, 1, memory_order_relaxed);
+            alya_atomic_fetch_add(&pool->io_completed, 1, ALYA_ORDER_RELAXED);
         } else {
             // Queue empty, yield
 #if defined(_WIN32)
@@ -474,12 +517,12 @@ int alya_vpn_thread_pool_init(int crypto_workers, int io_workers) {
     // Initialize shutdown event
     alya_event_init(&s_pool.shutdown_event);
 
-    atomic_init((atomic_u64 *)&s_pool.crypto_submitted, 0);
-    atomic_init((atomic_u64 *)&s_pool.crypto_completed, 0);
-    atomic_init((atomic_u64 *)&s_pool.io_submitted, 0);
-    atomic_init((atomic_u64 *)&s_pool.io_completed, 0);
-    atomic_init((atomic_u64 *)&s_pool.queue_full_drops, 0);
-    atomic_init((atomic_int *)&s_pool.shutting_down, 0);
+    alya_atomic_init(&s_pool.crypto_submitted, 0);
+    alya_atomic_init(&s_pool.crypto_completed, 0);
+    alya_atomic_init(&s_pool.io_submitted, 0);
+    alya_atomic_init(&s_pool.io_completed, 0);
+    alya_atomic_init(&s_pool.queue_full_drops, 0);
+    alya_atomic_init(&s_pool.shutting_down, 0);
 
     // Initialize buffer pool first (required for crypto/I/O workers)
     alya_vpn_buffer_pool_init();
@@ -535,7 +578,7 @@ void alya_vpn_thread_pool_shutdown(void) {
     if (!s_pool_initialized) return;
 
     // Signal shutdown
-    atomic_store_explicit((atomic_int *)&s_pool.shutting_down, 1, memory_order_release);
+    alya_atomic_store(&s_pool.shutting_down, 1, ALYA_ORDER_RELEASE);
     alya_event_signal(&s_pool.shutdown_event);
 
     // Wait for crypto workers
@@ -589,11 +632,11 @@ int alya_vpn_submit_crypto_work(AlyaCryptoWork *work) {
     item.sequence = 0;
 
     if (alya_work_queue_push(&s_pool.crypto_queue, &item) != 0) {
-        atomic_fetch_add_explicit((atomic_u64 *)&s_pool.queue_full_drops, 1, memory_order_relaxed);
+        alya_atomic_fetch_add(&s_pool.queue_full_drops, 1, ALYA_ORDER_RELAXED);
         return -1;
     }
 
-    atomic_fetch_add_explicit((atomic_u64 *)&s_pool.crypto_submitted, 1, memory_order_relaxed);
+    alya_atomic_fetch_add(&s_pool.crypto_submitted, 1, ALYA_ORDER_RELAXED);
     return 0;
 }
 
@@ -607,11 +650,11 @@ int alya_vpn_submit_io_work(AlyaIOWork *work) {
     item.sequence = 0;
 
     if (alya_work_queue_push(&s_pool.io_queue, &item) != 0) {
-        atomic_fetch_add_explicit((atomic_u64 *)&s_pool.queue_full_drops, 1, memory_order_relaxed);
+        alya_atomic_fetch_add(&s_pool.queue_full_drops, 1, ALYA_ORDER_RELAXED);
         return -1;
     }
 
-    atomic_fetch_add_explicit((atomic_u64 *)&s_pool.io_submitted, 1, memory_order_relaxed);
+    alya_atomic_fetch_add(&s_pool.io_submitted, 1, ALYA_ORDER_RELAXED);
     return 0;
 }
 
@@ -633,11 +676,11 @@ void alya_vpn_thread_pool_stats(uint64_t *crypto_submitted, uint64_t *crypto_com
                                  uint64_t *io_submitted, uint64_t *io_completed,
                                  uint64_t *queue_full_drops,
                                  int *crypto_workers, int *io_workers) {
-    if (crypto_submitted) *crypto_submitted = atomic_load_explicit((atomic_u64 *)&s_pool.crypto_submitted, memory_order_relaxed);
-    if (crypto_completed) *crypto_completed = atomic_load_explicit((atomic_u64 *)&s_pool.crypto_completed, memory_order_relaxed);
-    if (io_submitted) *io_submitted = atomic_load_explicit((atomic_u64 *)&s_pool.io_submitted, memory_order_relaxed);
-    if (io_completed) *io_completed = atomic_load_explicit((atomic_u64 *)&s_pool.io_completed, memory_order_relaxed);
-    if (queue_full_drops) *queue_full_drops = atomic_load_explicit((atomic_u64 *)&s_pool.queue_full_drops, memory_order_relaxed);
+    if (crypto_submitted) *crypto_submitted = alya_atomic_load(&s_pool.crypto_submitted, ALYA_ORDER_RELAXED);
+    if (crypto_completed) *crypto_completed = alya_atomic_load(&s_pool.crypto_completed, ALYA_ORDER_RELAXED);
+    if (io_submitted) *io_submitted = alya_atomic_load(&s_pool.io_submitted, ALYA_ORDER_RELAXED);
+    if (io_completed) *io_completed = alya_atomic_load(&s_pool.io_completed, ALYA_ORDER_RELAXED);
+    if (queue_full_drops) *queue_full_drops = alya_atomic_load(&s_pool.queue_full_drops, ALYA_ORDER_RELAXED);
     if (crypto_workers) *crypto_workers = s_pool.crypto_worker_count;
     if (io_workers) *io_workers = s_pool.io_worker_count;
 }
@@ -699,11 +742,11 @@ int alya_vpn_ffi_submit_crypto_work(const char *work_json) {
     item.sequence = 0;
 
     if (alya_work_queue_push(&s_pool.crypto_queue, &item) != 0) {
-        atomic_fetch_add_explicit((atomic_u64 *)&s_pool.queue_full_drops, 1, memory_order_relaxed);
+        alya_atomic_fetch_add(&s_pool.queue_full_drops, 1, ALYA_ORDER_RELAXED);
         return -1;
     }
 
-    atomic_fetch_add_explicit((atomic_u64 *)&s_pool.crypto_submitted, 1, memory_order_relaxed);
+    alya_atomic_fetch_add(&s_pool.crypto_submitted, 1, ALYA_ORDER_RELAXED);
     return 0;
 }
 
@@ -725,11 +768,11 @@ int alya_vpn_ffi_submit_io_work(const char *work_json) {
     item.sequence = 0;
 
     if (alya_work_queue_push(&s_pool.io_queue, &item) != 0) {
-        atomic_fetch_add_explicit((atomic_u64 *)&s_pool.queue_full_drops, 1, memory_order_relaxed);
+        alya_atomic_fetch_add(&s_pool.queue_full_drops, 1, ALYA_ORDER_RELAXED);
         return -1;
     }
 
-    atomic_fetch_add_explicit((atomic_u64 *)&s_pool.io_submitted, 1, memory_order_relaxed);
+    alya_atomic_fetch_add(&s_pool.io_submitted, 1, ALYA_ORDER_RELAXED);
     return 0;
 }
 
