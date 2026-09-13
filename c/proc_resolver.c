@@ -28,6 +28,7 @@
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sched.h>
+#include <signal.h>
 #ifndef SOCKET
 #define SOCKET int
 #endif
@@ -578,6 +579,133 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
     }
 
     closedir(dir);
+    return found;
+}
+
+int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len) {
+    return alya_vpn_get_process_by_port(local_port, out_name, max_len);
+#elif defined(__APPLE__)
+#include <libproc.h>
+#include <sys/proc_info.h>
+
+int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port, char *out_name, int max_len) {
+    if (!out_name || max_len <= 0) return 0;
+    out_name[0] = '\0';
+
+    int num_pids = proc_listallpids(NULL, 0);
+    if (num_pids <= 0) return 0;
+
+    pid_t *pids = (pid_t *)malloc(sizeof(pid_t) * (size_t)num_pids * 2);
+    if (!pids) return 0;
+
+    num_pids = proc_listallpids(pids, (int)(sizeof(pid_t) * (size_t)num_pids * 2));
+    if (num_pids <= 0) {
+        free(pids);
+        return 0;
+    }
+
+    int found = 0;
+    for (int i = 0; i < num_pids && !found; ++i) {
+        pid_t pid = pids[i];
+        if (pid <= 0) continue;
+
+        int buf_size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
+        if (buf_size <= 0) continue;
+
+        struct proc_fdinfo *fds = (struct proc_fdinfo *)malloc((size_t)buf_size);
+        if (!fds) continue;
+
+        int num_fds = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, buf_size);
+        if (num_fds <= 0) {
+            free(fds);
+            continue;
+        }
+
+        int count = num_fds / (int)sizeof(struct proc_fdinfo);
+        for (int j = 0; j < count; ++j) {
+            if (fds[j].proc_fdtype == PROX_FDTYPE_SOCKET) {
+                struct socket_fdinfo si;
+                int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
+                if (s == sizeof(si)) {
+                    if (si.psi.soi_kind == SOCKINFO_TCP) {
+                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_ini.insi_lport);
+                        int fport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_ini.insi_fport);
+                        if (lport == peer_remote_port && fport == proxy_local_port) {
+                            char name_buf[256];
+                            if (proc_name(pid, name_buf, sizeof(name_buf)) > 0) {
+                                strncpy(out_name, name_buf, (size_t)max_len - 1);
+                                out_name[max_len - 1] = '\0';
+                                found = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        free(fds);
+    }
+    free(pids);
+    return found;
+}
+
+int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
+    if (!out_name || max_len <= 0) return 0;
+    out_name[0] = '\0';
+
+    int num_pids = proc_listallpids(NULL, 0);
+    if (num_pids <= 0) return 0;
+
+    pid_t *pids = (pid_t *)malloc(sizeof(pid_t) * (size_t)num_pids * 2);
+    if (!pids) return 0;
+
+    num_pids = proc_listallpids(pids, (int)(sizeof(pid_t) * (size_t)num_pids * 2));
+    if (num_pids <= 0) {
+        free(pids);
+        return 0;
+    }
+
+    int found = 0;
+    for (int i = 0; i < num_pids && !found; ++i) {
+        pid_t pid = pids[i];
+        if (pid <= 0) continue;
+
+        int buf_size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
+        if (buf_size <= 0) continue;
+
+        struct proc_fdinfo *fds = (struct proc_fdinfo *)malloc((size_t)buf_size);
+        if (!fds) continue;
+
+        int num_fds = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, buf_size);
+        if (num_fds <= 0) {
+            free(fds);
+            continue;
+        }
+
+        int count = num_fds / (int)sizeof(struct proc_fdinfo);
+        for (int j = 0; j < count; ++j) {
+            if (fds[j].proc_fdtype == PROX_FDTYPE_SOCKET) {
+                struct socket_fdinfo si;
+                int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
+                if (s == sizeof(si)) {
+                    if (si.psi.soi_kind == SOCKINFO_TCP) {
+                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_ini.insi_lport);
+                        if (lport == local_port) {
+                            char name_buf[256];
+                            if (proc_name(pid, name_buf, sizeof(name_buf)) > 0) {
+                                strncpy(out_name, name_buf, (size_t)max_len - 1);
+                                out_name[max_len - 1] = '\0';
+                                found = 1;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        free(fds);
+    }
+    free(pids);
     return found;
 }
 
@@ -1838,9 +1966,112 @@ void alya_vpn_init_system_proxy_hook(void) {
     atexit(vpn_cleanup_on_exit);
     SetConsoleCtrlHandler(vpn_console_ctrl_handler, TRUE);
 }
+#elif defined(__APPLE__)
+
+static int s_mac_proxy_active = 0;
+
+static void vpn_mac_cleanup_on_exit(void) {
+    if (s_mac_proxy_active) {
+        alya_vpn_set_system_proxy(0, 0);
+    }
+}
+
+static void vpn_posix_sig_handler(int sig) {
+    (void)sig;
+    vpn_mac_cleanup_on_exit();
+    _exit(0);
+}
+
+void alya_vpn_set_system_proxy(int enable, int port) {
+    if (enable) {
+        char cmd[256];
+        // SOCKS5 proxy on Wi-Fi and Ethernet
+        snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxy \"Wi-Fi\" 127.0.0.1 %d 2>/dev/null", port);
+        system(cmd);
+        system("networksetup -setsocksfirewallproxystate \"Wi-Fi\" on 2>/dev/null");
+        snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxy \"Ethernet\" 127.0.0.1 %d 2>/dev/null", port);
+        system(cmd);
+        system("networksetup -setsocksfirewallproxystate \"Ethernet\" on 2>/dev/null");
+
+        // HTTP/HTTPS proxy
+        snprintf(cmd, sizeof(cmd), "networksetup -setwebproxy \"Wi-Fi\" 127.0.0.1 %d 2>/dev/null", port);
+        system(cmd);
+        system("networksetup -setwebproxystate \"Wi-Fi\" on 2>/dev/null");
+        snprintf(cmd, sizeof(cmd), "networksetup -setsecurewebproxy \"Wi-Fi\" 127.0.0.1 %d 2>/dev/null", port);
+        system(cmd);
+        system("networksetup -setsecurewebproxystate \"Wi-Fi\" on 2>/dev/null");
+
+        s_mac_proxy_active = 1;
+    } else {
+        system("networksetup -setsocksfirewallproxystate \"Wi-Fi\" off 2>/dev/null");
+        system("networksetup -setsocksfirewallproxystate \"Ethernet\" off 2>/dev/null");
+        system("networksetup -setwebproxystate \"Wi-Fi\" off 2>/dev/null");
+        system("networksetup -setsecurewebproxystate \"Wi-Fi\" off 2>/dev/null");
+        s_mac_proxy_active = 0;
+    }
+}
+
+void alya_vpn_init_system_proxy_hook(void) {
+    atexit(vpn_mac_cleanup_on_exit);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = vpn_posix_sig_handler;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+}
+
+#elif defined(__linux__)
+
+static int s_linux_proxy_active = 0;
+
+static void vpn_linux_cleanup_on_exit(void) {
+    if (s_linux_proxy_active) {
+        alya_vpn_set_system_proxy(0, 0);
+    }
+}
+
+static void vpn_posix_sig_handler(int sig) {
+    (void)sig;
+    vpn_linux_cleanup_on_exit();
+    _exit(0);
+}
+
+void alya_vpn_set_system_proxy(int enable, int port) {
+    if (enable) {
+        char cmd[256];
+        // GNOME / Ubuntu / Debian desktop proxy
+        system("gsettings set org.gnome.system.proxy mode 'manual' 2>/dev/null");
+        system("gsettings set org.gnome.system.proxy.socks host '127.0.0.1' 2>/dev/null");
+        snprintf(cmd, sizeof(cmd), "gsettings set org.gnome.system.proxy.socks port %d 2>/dev/null", port);
+        system(cmd);
+        system("gsettings set org.gnome.system.proxy.http host '127.0.0.1' 2>/dev/null");
+        snprintf(cmd, sizeof(cmd), "gsettings set org.gnome.system.proxy.http port %d 2>/dev/null", port);
+        system(cmd);
+        system("gsettings set org.gnome.system.proxy.https host '127.0.0.1' 2>/dev/null");
+        snprintf(cmd, sizeof(cmd), "gsettings set org.gnome.system.proxy.https port %d 2>/dev/null", port);
+        system(cmd);
+
+        s_linux_proxy_active = 1;
+    } else {
+        system("gsettings set org.gnome.system.proxy mode 'none' 2>/dev/null");
+        s_linux_proxy_active = 0;
+    }
+}
+
+void alya_vpn_init_system_proxy_hook(void) {
+    atexit(vpn_linux_cleanup_on_exit);
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = vpn_posix_sig_handler;
+    sigaction(SIGINT, &sa, NULL);
+    sigaction(SIGTERM, &sa, NULL);
+}
+
 #else
+
 void alya_vpn_set_system_proxy(int enable, int port) {
     (void)enable; (void)port;
 }
 void alya_vpn_init_system_proxy_hook(void) {}
+
 #endif
