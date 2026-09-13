@@ -3,3 +3,5 @@
 port = 51821
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
+crypto_threads = 2
+io_threads = 4

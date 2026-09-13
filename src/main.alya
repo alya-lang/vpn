@@ -10,7 +10,7 @@ import "./common/protocol.alya" as proto
 
 function print_banner()
     say("=================================================================")
-    say("           A L Y A   V P N   T U N N E L   (v0.1.5)              ")
+    say("           A L Y A   V P N   T U N N E L   (v0.1.6)              ")
     say("   High-Performance ChaCha20-Poly1305 Split-Tunneling Network    ")
     say("=================================================================")
 end
@@ -21,7 +21,9 @@ function print_usage()
     say("Commands:")
     say("  server                      Start the remote VPN tunnel server")
     say("    --port <port>             Listen port (default: 51821)")
-    say("    --pass <secret>           Shared passphrase for AEAD encryption\n")
+    say("    --pass <secret>           Shared passphrase for AEAD encryption")
+    say("    --crypto-threads <N>      Crypto worker thread count (default: 2)")
+    say("    --io-threads <N>          I/O worker thread count (default: 4)\n")
     say("  client                      Start the local client SOCKS5 proxy")
     say("    --server <host>           Remote VPN server host (default: 127.0.0.1)")
     say("    --port <port>             Remote VPN server port (default: 51821)")
@@ -33,7 +35,9 @@ function print_usage()
     say("                                exc: Listed apps BYPASS VPN (default)")
     say("    --apps <a,b,c>            Comma-separated app names or patterns")
     say("                              e.g. 'discord,steamwebhelper.exe,*torrent*'")
-    say("    --no-system-proxy         Do not configure Windows system proxy automatically\n")
+    say("    --crypto-threads <N>      Crypto worker thread count (default: 1)")
+    say("    --io-threads <N>          I/O worker thread count (default: 2)")
+    say("    --no-system-proxy         Do not configure system proxy automatically\n")
     say("  check-port <port>           Diagnostic: inspect process owning local port")
     say("  benchmark                   Run ChaCha20-Poly1305 encryption benchmark\n")
 end
@@ -80,6 +84,8 @@ function load_client_config(config_path)
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "mode": "exclude",
         "system_proxy": "true",
+        "crypto_threads": 1,
+        "io_threads": 2,
         "apps": []
     }
     let in_apps = 0
@@ -106,6 +112,10 @@ function load_client_config(config_path)
                 cfg["mode"] = strip_val(val)
             else if key == "system_proxy" or key == "auto_system_proxy"
                 cfg["system_proxy"] = strip_val(val)
+            else if key == "crypto_threads"
+                cfg["crypto_threads"] = proto::parse_number(strip_val(val))
+            else if key == "io_threads"
+                cfg["io_threads"] = proto::parse_number(strip_val(val))
             else if key == "apps"
                 in_apps = 1
                 let bracket_open = proto::find_char(val, "[")
@@ -166,7 +176,9 @@ function load_server_config(config_path)
     let lines = proto::split_string(content, "\n")
     let cfg = {
         "port": 51821,
-        "passphrase": "change_me_to_a_secure_shared_passphrase_2026"
+        "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
+        "crypto_threads": 2,
+        "io_threads": 4
     }
     let i = 0
     while i < len(lines)
@@ -183,6 +195,10 @@ function load_server_config(config_path)
                 cfg["port"] = proto::parse_number(strip_val(val))
             else if key == "passphrase"
                 cfg["passphrase"] = strip_val(val)
+            else if key == "crypto_threads"
+                cfg["crypto_threads"] = proto::parse_number(strip_val(val))
+            else if key == "io_threads"
+                cfg["io_threads"] = proto::parse_number(strip_val(val))
             end
         end
         i += 1
@@ -203,6 +219,8 @@ function main()
     if cmd == "server"
         let port = 51821
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
+        let crypto_threads = 2
+        let io_threads = 4
 
         # Check default config/server.toml if exists
         let srv_cfg_file = "config/server.toml"
@@ -210,6 +228,8 @@ function main()
         if file_cfg != null
             port = file_cfg["port"]
             pass = file_cfg["passphrase"]
+            crypto_threads = file_cfg["crypto_threads"]
+            io_threads = file_cfg["io_threads"]
         end
 
         let i = 1
@@ -219,6 +239,8 @@ function main()
                 if custom_cfg != null
                     port = custom_cfg["port"]
                     pass = custom_cfg["passphrase"]
+                    crypto_threads = custom_cfg["crypto_threads"]
+                    io_threads = custom_cfg["io_threads"]
                 end
                 i += 2
             else if args_list[i] == "--port" and i + 1 < len(args_list)
@@ -227,13 +249,19 @@ function main()
             else if args_list[i] == "--pass" and i + 1 < len(args_list)
                 pass = args_list[i + 1]
                 i += 2
+            else if args_list[i] == "--crypto-threads" and i + 1 < len(args_list)
+                crypto_threads = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--io-threads" and i + 1 < len(args_list)
+                io_threads = proto::parse_number(args_list[i + 1])
+                i += 2
             else
                 i += 1
             end
         end
 
         print_banner()
-        server::vpn_run_server(port, pass, server::vpn_client_thread)
+        server::vpn_run_server(port, pass, server::vpn_client_thread, crypto_threads, io_threads)
         return 0
     end
 
@@ -246,6 +274,8 @@ function main()
         let split_mode = router::mode_exclude() # Default blacklist
         let app_list = ["discord", "Discord.exe"]
         let auto_sys_proxy = 1
+        let crypto_threads = 1
+        let io_threads = 2
 
         # 1. Automatically load config/client.toml if present
         let cfg_file = "config/client.toml"
@@ -255,6 +285,8 @@ function main()
             srv_port = file_cfg["server_port"]
             proxy_port = file_cfg["local_port"]
             pass = file_cfg["passphrase"]
+            crypto_threads = file_cfg["crypto_threads"]
+            io_threads = file_cfg["io_threads"]
             let m = lower(file_cfg["mode"])
             if m == "all"
                 split_mode = router::mode_all()
@@ -273,7 +305,32 @@ function main()
 
         let i = 1
         while i < len(args_list)
-            if args_list[i] == "--server" and i + 1 < len(args_list)
+            if args_list[i] == "--config" and i + 1 < len(args_list)
+                let custom_cfg = load_client_config(args_list[i + 1])
+                if custom_cfg != null
+                    srv_host = custom_cfg["server_host"]
+                    srv_port = custom_cfg["server_port"]
+                    proxy_port = custom_cfg["local_port"]
+                    pass = custom_cfg["passphrase"]
+                    crypto_threads = custom_cfg["crypto_threads"]
+                    io_threads = custom_cfg["io_threads"]
+                    let m = lower(custom_cfg["mode"])
+                    if m == "all"
+                        split_mode = router::mode_all()
+                    else if m == "inc" or m == "include"
+                        split_mode = router::mode_include()
+                    else if m == "exc" or m == "exclude"
+                        split_mode = router::mode_exclude()
+                    end
+                    if custom_cfg["system_proxy"] == "false" or custom_cfg["system_proxy"] == "0"
+                        auto_sys_proxy = 0
+                    end
+                    if len(custom_cfg["apps"]) > 0
+                        app_list = custom_cfg["apps"]
+                    end
+                end
+                i += 2
+            else if args_list[i] == "--server" and i + 1 < len(args_list)
                 srv_host = args_list[i + 1]
                 i += 2
             else if args_list[i] == "--port" and i + 1 < len(args_list)
@@ -308,6 +365,12 @@ function main()
                 end
                 app_list = clean_apps
                 i += 2
+            else if args_list[i] == "--crypto-threads" and i + 1 < len(args_list)
+                crypto_threads = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--io-threads" and i + 1 < len(args_list)
+                io_threads = proto::parse_number(args_list[i + 1])
+                i += 2
             else if args_list[i] == "--no-system-proxy" or args_list[i] == "--no-proxy"
                 auto_sys_proxy = 0
                 i += 1
@@ -317,7 +380,7 @@ function main()
         end
 
         print_banner()
-        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list, auto_sys_proxy)
+        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list, auto_sys_proxy, crypto_threads, io_threads)
         return 0
     end
 

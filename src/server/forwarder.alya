@@ -9,14 +9,14 @@ import "../common/protocol.alya" as proto
 import "../common/thread_pool.alya" as tpool
 import "../ffi.alya"
 
-function vpn_run_server(listen_port, passphrase, client_thread_handler)
+function vpn_run_server(listen_port, passphrase, client_thread_handler, crypto_threads, io_threads)
     # 1. Initialize thread pool
-    let tp_init = tpool::thread_pool_init(2, 4)  # 2 crypto workers, 4 I/O workers
+    let tp_init = tpool::thread_pool_init(crypto_threads, io_threads)
     if tp_init != 0
         say("[ERROR] Failed to initialize thread pool")
         return 1
     end
-    say("[INFO] Thread pool initialized: 2 crypto workers, 4 I/O workers")
+    say("[INFO] Thread pool initialized: " + crypto_threads + " crypto workers, " + io_threads + " I/O workers")
 
     alya_vpn_set_session_passphrase(passphrase)
     let key = crypto::vpn_derive_key(passphrase)
