@@ -15,8 +15,75 @@ permissions:
   contents: write
 
 jobs:
+  build:
+    name: Build (${{ matrix.target.os-name }})
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - runner: ubuntu-latest
+            os-name: linux-x64
+            binary: alya-vpn
+            archive: alya-vpn-linux-x64.tar.gz
+          - runner: windows-latest
+            os-name: windows-x64
+            binary: alya-vpn.exe
+            archive: alya-vpn-windows-x64.zip
+          - runner: macos-latest
+            os-name: macos-arm64
+            binary: alya-vpn
+            archive: alya-vpn-macos-arm64.tar.gz
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Alya Compiler
+        uses: alya-lang/setup-alya@v1
+        with:
+          version: 'latest'
+
+      - name: Verify alyac installation
+        run: |
+          alyac --version
+
+      - name: Build binary
+        run: |
+          alyac build -o ${{ matrix.target.binary }}
+
+      - name: Package artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/config
+          Copy-Item ${{ matrix.target.binary }} dist/
+          Copy-Item config/*.toml dist/config/
+          if (Test-Path README.md) { Copy-Item README.md dist/ }
+          if (Test-Path LICENSE) { Copy-Item LICENSE dist/ }
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.target.archive }}
+
+      - name: Package artifacts (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist/config
+          cp ${{ matrix.target.binary }} dist/
+          chmod +x dist/${{ matrix.target.binary }}
+          cp config/*.toml dist/config/
+          cp README.md dist/ 2>/dev/null || true
+          cp LICENSE dist/ 2>/dev/null || true
+          tar -czvf ${{ matrix.target.archive }} -C dist .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target.os-name }}
+          path: ${{ matrix.target.archive }}
+          if-no-files-found: error
+
   release:
     name: Create GitHub Release
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -28,6 +95,16 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.x'
+
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List downloaded artifacts
+        run: |
+          ls -la artifacts/
 
       - name: Generate Release Notes
         id: notes
@@ -41,5 +118,6 @@ jobs:
           tag_name: ${{ steps.notes.outputs.tag }}
           name: ${{ steps.notes.outputs.title }}
           body_path: RELEASE_NOTES.md
+          files: artifacts/*
           draft: false
           prerelease: false
