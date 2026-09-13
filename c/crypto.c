@@ -332,6 +332,29 @@ static char s_session_key_hex[65] = {0};
 static uint8_t s_session_key_bin[32] = {0};
 static int s_has_session_key = 0;
 
+// Expose session key state for buffer_pool.c
+int alya_vpn_has_session_key(void) {
+    return s_has_session_key;
+}
+
+const uint8_t *alya_vpn_get_session_key_bin(void) {
+    return s_session_key_bin;
+}
+
+void alya_vpn_get_random_bytes(uint8_t *buf, size_t len) {
+    get_random_bytes(buf, len);
+}
+
+void alya_vpn_chacha20_xor(const uint8_t key[32], const uint8_t nonce[12],
+                            uint32_t counter, const uint8_t *in, uint8_t *out, size_t len) {
+    chacha20_xor(key, nonce, counter, in, out, len);
+}
+
+void alya_vpn_poly1305_mac(const uint8_t *msg, size_t msg_len,
+                            const uint8_t key[32], uint8_t tag[16]) {
+    poly1305_mac(msg, msg_len, key, tag);
+}
+
 void alya_vpn_derive_key(const char *passphrase, char *out_key_hex) {
     if (!passphrase) return;
     uint8_t hash[32];
@@ -626,5 +649,123 @@ const char *alya_vpn_pack_data_payload(int channel_id, const char *hex_data) {
     if (!hex_data) hex_data = "";
     snprintf(s_data_payload_buf, sizeof(s_data_payload_buf), "%d|%s", channel_id, hex_data);
     return s_data_payload_buf;
+}
+
+// ============================================================================
+// BINARY FRAME FORMAT (New)
+// ============================================================================
+// Frame structure:
+// [Magic: 2 bytes 'A','V'] [Version: 1 byte 0x01] [Type: 1 byte] [Nonce: 12 bytes] [Tag: 16 bytes] [Ciphertext: N bytes]
+// Total header: 32 bytes, Payload: N bytes = 1x overhead vs 2x for hex format
+
+static ALYA_THREAD_LOCAL uint8_t s_frame_buf_bin[65536];
+static ALYA_THREAD_LOCAL char s_plain_buf_bin[65536];
+static ALYA_THREAD_LOCAL int s_last_unpack_type_bin = 0;
+
+int alya_vpn_unpack_frame_bin_type(void) {
+    return s_last_unpack_type_bin;
+}
+
+const uint8_t *alya_vpn_pack_frame_bin(const char *key_hex, int msg_type, const char *payload, int payload_len, int *out_frame_len) {
+    if (msg_type <= 0 || payload_len < 0 || payload_len > 32768 || !out_frame_len) {
+        return NULL;
+    }
+
+    uint8_t key[32];
+    if (s_has_session_key) {
+        memcpy(key, s_session_key_bin, 32);
+    } else if (!key_hex || strlen(key_hex) < 64 || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        return NULL;
+    }
+
+    // Generate random 12-byte nonce directly (no hex round-trip)
+    uint8_t nonce[12];
+    get_random_bytes(nonce, 12);
+
+    // 1. One-time Poly1305 key generation via ChaCha20 block 0
+    uint8_t poly_key[32] = {0};
+    chacha20_xor(key, nonce, 0, poly_key, poly_key, 32);
+
+    // 2. Encrypt plaintext starting at counter 1
+    uint8_t ciphertext[32768];
+    if (payload_len > 0 && payload) {
+        chacha20_xor(key, nonce, 1, (const uint8_t *)payload, ciphertext, (size_t)payload_len);
+    }
+
+    // 3. Compute Poly1305 MAC tag
+    uint8_t tag[16];
+    poly1305_mac(ciphertext, (size_t)payload_len, poly_key, tag);
+
+    // 4. Build binary frame: [2B magic][1B version][1B type][12B nonce][16B tag][N ciphertext]
+    uint8_t *buf = s_frame_buf_bin;
+    buf[0] = 'A';
+    buf[1] = 'V';
+    buf[2] = 0x01;  // version
+    buf[3] = (uint8_t)msg_type;
+    memcpy(&buf[4], nonce, 12);
+    memcpy(&buf[16], tag, 16);
+    if (payload_len > 0) {
+        memcpy(&buf[32], ciphertext, (size_t)payload_len);
+    }
+
+    *out_frame_len = 32 + payload_len;
+    return buf;
+}
+
+const char *alya_vpn_unpack_frame_bin(const char *key_hex, const uint8_t *frame, int frame_len) {
+    s_last_unpack_type_bin = 0;
+    if (!frame || frame_len < 32) return NULL;
+
+    // Verify magic and version
+    if (frame[0] != 'A' || frame[1] != 'V' || frame[2] != 0x01) {
+        return NULL;
+    }
+
+    uint8_t key[32];
+    if (s_has_session_key) {
+        memcpy(key, s_session_key_bin, 32);
+    } else if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        return NULL;
+    }
+
+    // Message type
+    uint8_t msg_type = frame[3];
+
+    // Nonce (12 bytes at offset 4)
+    const uint8_t *nonce = &frame[4];
+
+    // Tag (16 bytes at offset 16)
+    const uint8_t *expected_tag = &frame[16];
+
+    // Ciphertext (remaining bytes after 32-byte header)
+    int raw_len = frame_len - 32;
+    if (raw_len < 0 || raw_len > (int)sizeof(s_plain_buf_bin) - 8) return NULL;
+
+    const uint8_t *ciphertext = &frame[32];
+
+    // 1. One-time Poly1305 key generation via ChaCha20 block 0
+    uint8_t poly_key[32] = {0};
+    chacha20_xor(key, nonce, 0, poly_key, poly_key, 32);
+
+    // 2. Compute and verify Poly1305 MAC
+    uint8_t computed_tag[16];
+    poly1305_mac(ciphertext, (size_t)raw_len, poly_key, computed_tag);
+
+    int diff = 0;
+    for (int i = 0; i < 16; ++i) {
+        diff |= (computed_tag[i] ^ expected_tag[i]);
+    }
+    if (diff != 0) {
+        return NULL; // MAC verification failed!
+    }
+
+    // 3. Decrypt ciphertext starting at counter 1
+    if (raw_len > 0) {
+        chacha20_xor(key, nonce, 1, ciphertext, (uint8_t *)s_plain_buf_bin, (size_t)raw_len);
+    }
+    s_plain_buf_bin[raw_len] = '\0';
+    s_last_unpack_type_bin = (int)msg_type;
+
+    return s_plain_buf_bin;
 }
 

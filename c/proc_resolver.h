@@ -11,6 +11,14 @@ extern "C" {
 // Returns 1 on success, 0 on failure / process not found.
 int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len);
 
+// NEW: Resolves the process by matching BOTH the proxy's local listening port
+// AND the peer's remote (ephemeral) port. This is required because the VPN
+// proxy accepts multiple client connections on the same local port, and each
+// connection has a unique peer remote port. The TCP table entry for an accepted
+// connection has dwLocalPort == proxy_local_port and dwRemotePort == peer_remote_port.
+// Returns 1 on success, 0 on failure / process not found.
+int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port, char *out_name, int max_len);
+
 // Resolves executable name for a local UDP port.
 int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len);
 
@@ -40,10 +48,11 @@ void alya_vpn_set_routing(int mode, const char *apps_csv);
 // Use this instead of building a CSV in Alya to avoid array-element pointer-address bug.
 void alya_vpn_add_routing_app(const char *app_name);
 
-// Resolves process from local peer port and determines whether it should route via VPN.
+// Resolves process from proxy local port AND peer remote port and determines
+// whether it should route via VPN.
 // Fills out_proc_name with the resolved process name.
 // Returns 1 (route via VPN tunnel) or 0 (direct connection / bypass).
-int alya_vpn_check_peer_route(int peer_port, char *out_proc_name, int max_len);
+int alya_vpn_check_peer_route(int proxy_local_port, int peer_remote_port, char *out_proc_name, int max_len);
 
 // Directly checks if a process name matches configured routing rules.
 int alya_vpn_should_route(const char *proc_name);
@@ -81,6 +90,21 @@ int  alya_vpn_srv_ch_count(void);
 int  alya_vpn_srv_ch_id_at(int index);
 int  alya_vpn_srv_ch_sock_at(int index);
 void alya_vpn_srv_ch_clear(void);
+
+// ============================================================================
+// Buffer Pool & Zero-Copy I/O (New - eliminates hex encoding/decoding)
+// ============================================================================
+
+#include "buffer_pool.h"
+// All buffer pool functions are declared in buffer_pool.h:
+// - alya_vpn_buffer_pool_init / shutdown
+// - alya_vpn_buffer_acquire / release / ref
+// - alya_vpn_buffer_data / used / set_used / reset / capacity
+// - alya_vpn_sock_recv_into_buffer / sock_send_from_buffer
+// - alya_vpn_sock_send_frame / sock_recv_frame (scatter/gather)
+// - alya_vpn_pack_frame_into_buffer / unpack_frame_from_buffer
+// - alya_vpn_unpack_frame_buffer_type
+// - alya_vpn_buffer_pool_stats / get_stats
 
 #ifdef __cplusplus
 }

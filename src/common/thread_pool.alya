@@ -1,0 +1,138 @@
+# Alya VPN - Thread Pool Wrapper
+# High-level API for thread pool operations from Alya
+
+import "../ffi.alya"
+
+# Work types
+function WORK_CRYPTO_ENCRYPT() return 1 end
+function WORK_CRYPTO_DECRYPT() return 2 end
+function WORK_IO_READ() return 3 end
+function WORK_IO_WRITE() return 4 end
+function WORK_IO_ACCEPT() return 5 end
+
+# Initialize thread pool
+# crypto_workers: number of crypto workers (0 = auto)
+# io_workers: number of I/O workers (0 = auto)
+# Returns 0 on success
+function thread_pool_init(crypto_workers, io_workers)
+    return alya_vpn_ffi_thread_pool_init(crypto_workers, io_workers)
+end
+
+# Shutdown thread pool
+function thread_pool_shutdown()
+    alya_vpn_ffi_thread_pool_shutdown()
+end
+
+# Check if thread pool is initialized
+function thread_pool_is_initialized()
+    return alya_vpn_ffi_thread_pool_is_initialized()
+end
+
+# Wait for all pending work to complete
+function thread_pool_drain()
+    alya_vpn_ffi_thread_pool_drain()
+end
+
+# Submit crypto encryption work
+# buffer_id: buffer containing plaintext
+# msg_type: message type for frame
+# payload_len: length of plaintext
+# channel_id: associated channel
+# key_hex: optional key (uses session key if empty)
+# Returns 0 on success, -1 if queue full
+function thread_pool_submit_crypto_encrypt(buffer_id, msg_type, payload_len, channel_id, key_hex)
+    let json = ""
+    json += "{\"work_type\":" + WORK_CRYPTO_ENCRYPT() + ","
+    json += "\"buffer_id\":" + buffer_id + ","
+    json += "\"msg_type\":" + msg_type + ","
+    json += "\"payload_len\":" + payload_len + ","
+    json += "\"frame_len\":0,"
+    json += "\"channel_id\":" + channel_id + ","
+    json += "\"key_hex\":\"" + key_hex + "\"}"
+    return alya_vpn_ffi_submit_crypto_work(json)
+end
+
+# Submit crypto decryption work
+# buffer_id: buffer containing frame
+# frame_len: total frame length
+# channel_id: associated channel
+# key_hex: optional key (uses session key if empty)
+# Returns 0 on success, -1 if queue full
+function thread_pool_submit_crypto_decrypt(buffer_id, frame_len, channel_id, key_hex)
+    let json = ""
+    json += "{\"work_type\":" + WORK_CRYPTO_DECRYPT() + ","
+    json += "\"buffer_id\":" + buffer_id + ","
+    json += "\"msg_type\":0,"
+    json += "\"payload_len\":0,"
+    json += "\"frame_len\":" + frame_len + ","
+    json += "\"channel_id\":" + channel_id + ","
+    json += "\"key_hex\":\"" + key_hex + "\"}"
+    return alya_vpn_ffi_submit_crypto_work(json)
+end
+
+# Submit I/O read work
+# sock: socket descriptor
+# buffer_id: buffer to read into
+# len: max bytes to read
+# channel_id: associated channel
+# Returns 0 on success, -1 if queue full
+function thread_pool_submit_io_read(sock, buffer_id, len, channel_id)
+    let json = ""
+    json += "{\"work_type\":" + WORK_IO_READ() + ","
+    json += "\"sock\":" + sock + ","
+    json += "\"buffer_id\":" + buffer_id + ","
+    json += "\"offset\":0,"
+    json += "\"len\":" + len + ","
+    json += "\"channel_id\":" + channel_id + "}"
+    return alya_vpn_ffi_submit_io_work(json)
+end
+
+# Submit I/O write work
+# sock: socket descriptor
+# buffer_id: buffer to write from
+# offset: offset in buffer
+# len: bytes to write
+# channel_id: associated channel
+# Returns 0 on success, -1 if queue full
+function thread_pool_submit_io_write(sock, buffer_id, offset, len, channel_id)
+    let json = ""
+    json += "{\"work_type\":" + WORK_IO_WRITE() + ","
+    json += "\"sock\":" + sock + ","
+    json += "\"buffer_id\":" + buffer_id + ","
+    json += "\"offset\":" + offset + ","
+    json += "\"len\":" + len + ","
+    json += "\"channel_id\":" + channel_id + "}"
+    return alya_vpn_ffi_submit_io_work(json)
+end
+
+# Submit I/O accept work
+# sock: listening socket
+# buffer_id: unused (can be -1)
+# channel_id: associated channel
+# Returns 0 on success, -1 if queue full
+function thread_pool_submit_io_accept(sock, buffer_id, channel_id)
+    let json = ""
+    json += "{\"work_type\":" + WORK_IO_ACCEPT() + ","
+    json += "\"sock\":" + sock + ","
+    json += "\"buffer_id\":" + buffer_id + ","
+    json += "\"offset\":0,"
+    json += "\"len\":0,"
+    json += "\"channel_id\":" + channel_id + "}"
+    return alya_vpn_ffi_submit_io_work(json)
+end
+
+# Assign channel to I/O worker for affinity
+function thread_pool_assign_channel_worker(channel_id, worker_id)
+    alya_vpn_ffi_assign_channel_worker(channel_id, worker_id)
+end
+
+# Get assigned I/O worker for channel
+function thread_pool_get_channel_worker(channel_id)
+    return alya_vpn_ffi_get_channel_worker(channel_id)
+end
+
+# Auto-assign channel to I/O worker using round-robin
+function thread_pool_auto_assign_channel(channel_id, io_worker_count)
+    let worker = channel_id % io_worker_count
+    thread_pool_assign_channel_worker(channel_id, worker)
+end

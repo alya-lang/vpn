@@ -13,6 +13,6 @@ keywords = ["alya", "vpn", "tunnel", "network", "split-tunneling", "proxy", "sec
 [dependencies]
 
 [build]
-c-sources = ["c/crypto.c", "c/proc_resolver.c"]
-c-flags = ["-O2"]
+c-sources = ["c/crypto.c", "c/proc_resolver.c", "c/buffer_pool.c", "c/thread_pool.c"]
+c-flags = ["-O2", "-std=c11", "-Wall", "-Wextra"]
 c-include-dirs = ["c"]

@@ -1,0 +1,12 @@
+import "../src/ffi.alya"
+import "../src/client/resolver.alya" as resolver
+
+function main()
+    alya_vpn_set_routing(1, "chrome.exe,chrome,curl.exe,curl")
+    let r1 = alya_vpn_should_route("curl.exe")
+    say("curl.exe route: " + r1)
+    let r2 = alya_vpn_should_route("discord.exe")
+    say("discord.exe route: " + r2)
+end
+
+main()

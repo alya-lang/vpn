@@ -6,16 +6,29 @@ import "std/os" as os
 import "std/thread" as thread
 import "../common/crypto.alya" as crypto
 import "../common/protocol.alya" as proto
+import "../common/thread_pool.alya" as tpool
 import "../ffi.alya"
 
 function vpn_run_server(listen_port, passphrase, client_thread_handler)
+    # 1. Initialize thread pool
+    let tp_init = tpool::thread_pool_init(8, 16)  # 8 crypto workers, 16 I/O workers
+    if tp_init != 0
+        say("[ERROR] Failed to initialize thread pool")
+        return 1
+    end
+    say("[INFO] Thread pool initialized: 8 crypto workers, 16 I/O workers")
+
     alya_vpn_set_session_passphrase(passphrase)
     let key = crypto::vpn_derive_key(passphrase)
     let server_sock = net::tcp_listen(listen_port, 32)
     if server_sock < 0
         say("[ERROR] Failed to bind VPN server to port " + listen_port)
+        tpool::thread_pool_shutdown()
         return 1
     end
+
+    # Assign listen socket to I/O worker 0
+    tpool::thread_pool_assign_channel_worker(-1, 0)
 
     say("[INFO] ========================================")
     say("[INFO] Alya VPN Server running on port " + listen_port)
@@ -24,7 +37,7 @@ function vpn_run_server(listen_port, passphrase, client_thread_handler)
     say("[INFO] ========================================")
 
     while 1
-        # Poll for new client connection (500ms timeout)
+        # Poll for new client connection (500ms timeout) - could submit to I/O worker
         let poll_res = net::tcp_poll(server_sock, 500)
         if poll_res == 1
             let client_sock = net::tcp_accept(server_sock)
@@ -40,6 +53,7 @@ function vpn_run_server(listen_port, passphrase, client_thread_handler)
     end
 
     net::tcp_close(server_sock)
+    tpool::thread_pool_shutdown()
     return 0
 end
 

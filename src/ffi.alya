@@ -9,7 +9,15 @@ extern "C"
     function alya_vpn_pack_frame(key_hex: str, msg_type: i32, payload: str, payload_len: i32) -> str
     function alya_vpn_unpack_frame(key_hex: str, frame_line: str, frame_len: i32) -> str
     function alya_vpn_unpack_frame_type() -> i32
+
+    # Binary frame format (new, replaces text-based hex format)
+    # Frame: [Magic: 2 bytes 'A','V'] [Version: 1 byte 0x01] [Type: 1 byte] [Nonce: 12 bytes] [Tag: 16 bytes] [Ciphertext: N bytes]
+    function alya_vpn_pack_frame_bin(key_hex: str, msg_type: i32, payload: str, payload_len: i32, out_frame_len: ptr) -> ptr
+    function alya_vpn_unpack_frame_bin(key_hex: str, frame: ptr, frame_len: i32) -> str
+    function alya_vpn_unpack_frame_bin_type() -> i32
+
     function alya_vpn_get_process_by_port(local_port: i32, out_name: ptr, max_len: i32) -> i32
+    function alya_vpn_get_process_by_peer_port(proxy_local_port: i32, peer_remote_port: i32, out_name: ptr, max_len: i32) -> i32
     function alya_vpn_get_udp_process_by_port(local_port: i32, out_name: ptr, max_len: i32) -> i32
     function alya_vpn_socks5_handshake(client_sock: i32, out_host: ptr, max_host_len: i32) -> i32
     function alya_vpn_sock_recv_hex(sock: i32, max_bytes: i32) -> str
@@ -25,7 +33,7 @@ extern "C"
     function alya_vpn_set_routing(mode: i32, apps_csv: str) -> void
     function alya_vpn_add_routing_app(app_name: str) -> void
     function alya_vpn_sleep_ms(ms: i32) -> void
-    function alya_vpn_check_peer_route(peer_port: i32, out_proc_name: ptr, max_len: i32) -> i32
+    function alya_vpn_check_peer_route(proxy_local_port: i32, peer_remote_port: i32, out_proc_name: ptr, max_len: i32) -> i32
     function alya_vpn_should_route(proc_name: str) -> i32
 
     # Client Channel Table (O(1), zero Alya allocations)
@@ -54,4 +62,107 @@ extern "C"
     function alya_vpn_srv_ch_id_at(index: i32) -> i32
     function alya_vpn_srv_ch_sock_at(index: i32) -> i32
     function alya_vpn_srv_ch_clear() -> void
+
+    # ============================================================================
+    # Thread Pool API
+    # ============================================================================
+    # Initialize thread pool with specified worker counts
+    # crypto_workers: number of crypto worker threads (0 = auto, default 4)
+    # io_workers: number of I/O worker threads (0 = auto, default 8)
+    # Returns 0 on success, -1 on failure
+    function alya_vpn_ffi_thread_pool_init(crypto_workers: i32, io_workers: i32) -> i32
+
+    # Shutdown thread pool and wait for all workers to exit
+    function alya_vpn_ffi_thread_pool_shutdown() -> void
+
+    # Submit crypto work (encrypt/decrypt)
+    # work_json: JSON string with work parameters
+    # Returns 0 on success, -1 if queue full, -2 if not initialized
+    function alya_vpn_ffi_submit_crypto_work(work_json: str) -> i32
+
+    # Submit I/O work (read/write/accept)
+    # work_json: JSON string with work parameters
+    # Returns 0 on success, -1 if queue full, -2 if not initialized
+    function alya_vpn_ffi_submit_io_work(work_json: str) -> i32
+
+    # Assign channel to specific I/O worker for affinity
+    # channel_id: channel identifier
+    # worker_id: I/O worker index (0 to io_worker_count-1), or -1 for round-robin
+    function alya_vpn_ffi_assign_channel_worker(channel_id: i32, worker_id: i32) -> void
+
+    # Get assigned I/O worker for channel
+    function alya_vpn_ffi_get_channel_worker(channel_id: i32) -> i32
+
+    # Check if thread pool is initialized
+    function alya_vpn_ffi_thread_pool_is_initialized() -> i32
+
+    # Wait for all pending work to complete (drain queues)
+    function alya_vpn_ffi_thread_pool_drain() -> void
+
+    # ============================================================================
+    # Buffer Pool API
+    # ============================================================================
+    # Initialize the global buffer pool (call once at startup)
+    function alya_vpn_buffer_pool_init() -> void
+
+    # Shutdown and free all resources
+    function alya_vpn_buffer_pool_shutdown() -> void
+
+    # Acquire a buffer from the pool
+    # Returns buffer index (0 to ALYA_BUFFER_COUNT-1) or -1 on failure
+    function alya_vpn_buffer_acquire() -> i32
+
+    # Release a buffer back to the pool
+    # buffer_id: index returned by alya_vpn_buffer_acquire
+    function alya_vpn_buffer_release(buffer_id: i32) -> void
+
+    # Get pointer to buffer data (for direct memory access)
+    # Returns NULL if buffer_id is invalid
+    function alya_vpn_buffer_data(buffer_id: i32) -> ptr
+
+    # Get used bytes in buffer
+    function alya_vpn_buffer_used(buffer_id: i32) -> i32
+
+    # Set used bytes in buffer (for manual frame construction)
+    function alya_vpn_buffer_set_used(buffer_id: i32, used: i32) -> void
+
+    # Reset buffer (mark as empty, keep ownership)
+    function alya_vpn_buffer_reset(buffer_id: i32) -> void
+
+    # Get buffer capacity (always ALYA_BUFFER_SIZE)
+    function alya_vpn_buffer_capacity(buffer_id: i32) -> i32
+
+    # Receive directly into pool buffer (eliminates copy)
+    # sock: socket descriptor
+    # buffer_id: buffer from alya_vpn_buffer_acquire()
+    # max_bytes: maximum bytes to receive (up to ALYA_MAX_PAYLOAD)
+    # Returns: bytes received (>0), 0 on EOF, -1 on error
+    function alya_vpn_sock_recv_into_buffer(sock: i32, buffer_id: i32, max_bytes: i32) -> i32
+
+    # Send from pool buffer (zero-copy)
+    # sock: socket descriptor
+    # buffer_id: buffer from alya_vpn_buffer_acquire()
+    # offset: offset within buffer to start sending from
+    # len: number of bytes to send
+    # Returns: bytes sent (>0), 0 on EOF, -1 on error
+    function alya_vpn_sock_send_from_buffer(sock: i32, buffer_id: i32, offset: i32, len: i32) -> i32
+
+    # Build binary frame directly in pool buffer
+    # buffer_id: acquired buffer
+    # key_hex: 64-char hex key (or NULL to use session key)
+    # msg_type: message type (1 byte)
+    # payload: plaintext payload
+    # payload_len: payload length
+    # out_frame_len: output total frame length (header + ciphertext)
+    # Returns: pointer to frame in buffer (or NULL on error)
+    function alya_vpn_pack_frame_into_buffer(buffer_id: i32, key_hex: str, msg_type: i32, payload: str, payload_len: i32, out_frame_len: ptr) -> ptr
+
+    # Parse binary frame from pool buffer
+    # buffer_id: buffer containing frame
+    # frame_len: total frame length
+    # Returns: pointer to decrypted plaintext in static thread-local buffer, or NULL on error
+    function alya_vpn_unpack_frame_from_buffer(key_hex: str, buffer_id: i32, frame_len: i32) -> str
+
+    # Get message type of last successfully unpacked frame
+    function alya_vpn_unpack_frame_buffer_type() -> i32
 end

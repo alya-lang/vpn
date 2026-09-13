@@ -1,4 +1,6 @@
 #include "proc_resolver.h"
+#include "buffer_pool.h"
+#include "crypto.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -190,6 +192,74 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
     return found;
 }
 
+// NEW FUNCTION: Resolves process by matching BOTH proxy local port AND peer remote port.
+// This is needed because the VPN proxy accepts connections on proxy_local_port,
+// and each client connection has a unique peer_remote_port (ephemeral port).
+// The TCP table entry for the accepted connection will have:
+//   dwLocalPort == proxy_local_port (in network order)
+//   dwRemotePort == peer_remote_port (in network order)
+int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port, char *out_name, int max_len) {
+    if (!out_name || max_len <= 0) return 0;
+
+    HMODULE hIpHlp = LoadLibraryA("iphlpapi.dll");
+    if (!hIpHlp) return 0;
+
+    pfnGetExtendedTcpTable pGetTable = (pfnGetExtendedTcpTable)GetProcAddress(hIpHlp, "GetExtendedTcpTable");
+    if (!pGetTable) {
+        FreeLibrary(hIpHlp);
+        return 0;
+    }
+
+    uint16_t target_local_port_network = htons((uint16_t)proxy_local_port);
+    uint16_t target_remote_port_network = htons((uint16_t)peer_remote_port);
+    int found = 0;
+
+    // --- IPv4 lookup ---
+    DWORD size = 0;
+    pGetTable(NULL, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (size > 0) {
+        ALYA_MIB_TCPTABLE_OWNER_PID *table = (ALYA_MIB_TCPTABLE_OWNER_PID *)malloc(size);
+        if (table) {
+            if (pGetTable(table, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
+                for (DWORD i = 0; i < table->dwNumEntries; ++i) {
+                    if (table->table[i].dwLocalPort == target_local_port_network &&
+                        table->table[i].dwRemotePort == target_remote_port_network) {
+                        DWORD pid = table->table[i].dwOwningPid;
+                        found = get_process_name_by_pid(pid, out_name, max_len);
+                        break;
+                    }
+                }
+            }
+            free(table);
+        }
+    }
+
+    // --- IPv6 fallback (curl connects via IPv6 when DNS returns AAAA records) ---
+    if (!found) {
+        DWORD size6 = 0;
+        pGetTable(NULL, &size6, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
+        if (size6 > 0) {
+            ALYA_MIB_TCP6TABLE_OWNER_PID *table6 = (ALYA_MIB_TCP6TABLE_OWNER_PID *)malloc(size6);
+            if (table6) {
+                if (pGetTable(table6, &size6, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
+                    for (DWORD i = 0; i < table6->dwNumEntries; ++i) {
+                        if (table6->table[i].dwLocalPort == target_local_port_network &&
+                            table6->table[i].dwRemotePort == target_remote_port_network) {
+                            DWORD pid = table6->table[i].dwOwningPid;
+                            found = get_process_name_by_pid(pid, out_name, max_len);
+                            break;
+                        }
+                    }
+                }
+                free(table6);
+            }
+        }
+    }
+
+    FreeLibrary(hIpHlp);
+    return found;
+}
+
 
 int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len) {
     if (!out_name || max_len <= 0) return 0;
@@ -325,6 +395,118 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
     return found;
 }
 
+// Linux equivalent for peer port matching: reads /proc/net/tcp and /proc/net/tcp6
+// and matches both local port AND remote port to find the correct inode.
+// The inode is then matched against /proc/<pid>/fd/ socket symlinks.
+int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port, char *out_name, int max_len) {
+    if (!out_name || max_len <= 0) return 0;
+
+    // Scan /proc/net/tcp (IPv4)
+    FILE *f = fopen("/proc/net/tcp", "r");
+    if (!f) return 0;
+
+    char line[512];
+    // Skip header
+    if (!fgets(line, sizeof(line), f)) {
+        fclose(f);
+        // Try IPv6
+        f = fopen("/proc/net/tcp6", "r");
+        if (!f) return 0;
+        if (!fgets(line, sizeof(line), f)) {
+            fclose(f);
+            return 0;
+        }
+    }
+
+    int target_inode = -1;
+    while (fgets(line, sizeof(line), f)) {
+        int sl;
+        unsigned int local_ip, local_p, remote_ip, remote_p;
+        int inode;
+        // Format: sl local_address:local_port rem_address:rem_port st tx_queue rx_queue tr tm->when retrnsmt uid timeout inode
+        if (sscanf(line, "%d: %x:%x %x:%x %*x %*x:%*x %*x:%*x %*x %*d %*d %d",
+                   &sl, &local_ip, &local_p, &remote_ip, &remote_p, &inode) >= 5) {
+            if ((int)local_p == proxy_local_port && (int)remote_p == peer_remote_port) {
+                target_inode = inode;
+                break;
+            }
+        }
+    }
+    fclose(f);
+
+    if (target_inode <= 0) {
+        // Try IPv6
+        f = fopen("/proc/net/tcp6", "r");
+        if (f) {
+            if (fgets(line, sizeof(line), f)) {
+                while (fgets(line, sizeof(line), f)) {
+                    int sl;
+                    unsigned int local_ip[4], local_p, remote_ip[4], remote_p;
+                    int inode;
+                    if (sscanf(line, "%d: %x:%x:%x:%x:%x %x:%x:%x:%x:%x %*x %*x:%*x %*x:%*x %*x %*d %*d %d",
+                               &sl,
+                               &local_ip[0], &local_ip[1], &local_ip[2], &local_ip[3], &local_p,
+                               &remote_ip[0], &remote_ip[1], &remote_ip[2], &remote_ip[3], &remote_p,
+                               &inode) >= 10) {
+                        if ((int)local_p == proxy_local_port && (int)remote_p == peer_remote_port) {
+                            target_inode = inode;
+                            break;
+                        }
+                    }
+                }
+            }
+            fclose(f);
+        }
+    }
+
+    if (target_inode <= 0) return 0;
+
+    // Now find the process owning this inode (same as alya_vpn_get_process_by_port)
+    DIR *dir = opendir("/proc");
+    if (!dir) return 0;
+
+    struct dirent *entry;
+    char target_socket[64];
+    snprintf(target_socket, sizeof(target_socket), "socket:[%d]", target_inode);
+
+    int found = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
+
+        char fd_dir_path[256];
+        snprintf(fd_dir_path, sizeof(fd_dir_path), "/proc/%s/fd", entry->d_name);
+        DIR *fd_dir = opendir(fd_dir_path);
+        if (!fd_dir) continue;
+
+        struct dirent *fd_entry;
+        while ((fd_entry = readdir(fd_dir)) != NULL) {
+            char link_path[512];
+            snprintf(link_path, sizeof(link_path), "%s/%s", fd_dir_path, fd_entry->d_name);
+            char target[256] = {0};
+            ssize_t len = readlink(link_path, target, sizeof(target) - 1);
+            if (len > 0 && strcmp(target, target_socket) == 0) {
+                char comm_path[256];
+                snprintf(comm_path, sizeof(comm_path), "/proc/%s/comm", entry->d_name);
+                FILE *comm_f = fopen(comm_path, "r");
+                if (comm_f) {
+                    if (fgets(out_name, max_len, comm_f)) {
+                        char *nl = strchr(out_name, '\n');
+                        if (nl) *nl = '\0';
+                        found = 1;
+                    }
+                    fclose(comm_f);
+                }
+                break;
+            }
+        }
+        closedir(fd_dir);
+        if (found) break;
+    }
+
+    closedir(dir);
+    return found;
+}
+
 int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len) {
     return alya_vpn_get_process_by_port(local_port, out_name, max_len);
 }
@@ -336,6 +518,14 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
     (void)out_name;
     (void)max_len;
     return 0; // Unsupported platform
+}
+
+int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port, char *out_name, int max_len) {
+    (void)proxy_local_port;
+    (void)peer_remote_port;
+    (void)out_name;
+    (void)max_len;
+    return 0;
 }
 
 int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len) {
@@ -589,17 +779,19 @@ int alya_vpn_should_route(const char *proc_name) {
     return 1;
 }
 
-int alya_vpn_check_peer_route(int peer_port, char *out_proc_name, int max_len) {
+// UPDATED: Now takes both proxy_local_port (the port the VPN proxy listens on)
+// and peer_remote_port (the client's ephemeral source port).
+// Uses the new alya_vpn_get_process_by_peer_port which matches BOTH ports.
+int alya_vpn_check_peer_route(int proxy_local_port, int peer_remote_port, char *out_proc_name, int max_len) {
     if (!out_proc_name || max_len <= 0) return 1;
     out_proc_name[0] = '\0';
-    int res = alya_vpn_get_process_by_port(peer_port, out_proc_name, max_len);
+    int res = alya_vpn_get_process_by_peer_port(proxy_local_port, peer_remote_port, out_proc_name, max_len);
     if (!res || !out_proc_name[0]) {
         strncpy(out_proc_name, "unknown", (size_t)max_len - 1);
         out_proc_name[max_len - 1] = '\0';
     }
     return alya_vpn_should_route(out_proc_name);
 }
-
 
 
 // ============================================================================
@@ -844,5 +1036,3 @@ int alya_vpn_srv_ch_sock_at(int index) {
 void alya_vpn_srv_ch_clear(void) {
     memset(s_server_channels, 0, sizeof(s_server_channels));
 }
-
-
