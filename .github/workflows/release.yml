@@ -34,6 +34,10 @@ jobs:
             os-name: macos-arm64
             binary: alya-vpn
             archive: alya-vpn-macos-arm64.tar.gz
+          - runner: macos-13
+            os-name: macos-x64
+            binary: alya-vpn
+            archive: alya-vpn-macos-x64.tar.gz
 
     steps:
       - name: Checkout repository

@@ -9,6 +9,7 @@ Direct standalone executable packages are attached below for all supported opera
 | 🪟 **Windows** | x86_64 | `alya-vpn-windows-x64.zip` | `alya-vpn.exe`, `config/` |
 | 🐧 **Linux** | x86_64 | `alya-vpn-linux-x64.tar.gz` | `alya-vpn`, `config/` |
 | 🍎 **macOS** | Apple Silicon (arm64) | `alya-vpn-macos-arm64.tar.gz` | `alya-vpn`, `config/` |
+| 🍎 **macOS** | Intel (x86_64) | `alya-vpn-macos-x64.tar.gz` | `alya-vpn`, `config/` |
 
 ## 📦 Installation via Alya CLI
 
