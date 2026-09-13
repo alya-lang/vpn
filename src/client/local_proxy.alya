@@ -24,12 +24,12 @@ end
 # Starts the local SOCKS5 proxy and routes traffic according to split-tunneling configuration
 function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps, auto_sys_proxy)
     # 1. Initialize thread pool
-    let tp_init = tpool::thread_pool_init(4, 8)  # 4 crypto workers, 8 I/O workers
+    let tp_init = tpool::thread_pool_init(1, 2)  # 1 crypto worker, 2 I/O workers
     if tp_init != 0
         say("[ERROR] Failed to initialize thread pool")
         return 1
     end
-    say("[INFO] Thread pool initialized: 4 crypto workers, 8 I/O workers")
+    say("[INFO] Thread pool initialized: 1 crypto worker, 2 I/O workers")
 
     # 2. Initialize native session key in C
     alya_vpn_set_session_passphrase(passphrase)

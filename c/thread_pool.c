@@ -422,11 +422,11 @@ static THREAD_RETURN_TYPE alya_crypto_worker(void *arg) {
 
             alya_atomic_fetch_add(&pool->crypto_completed, 1, ALYA_ORDER_RELAXED);
         } else {
-            // Queue empty, yield
+            // Queue empty, sleep briefly to avoid burning CPU cycles
 #if defined(_WIN32)
-            SwitchToThread();
+            Sleep(2);
 #else
-            sched_yield();
+            usleep(2000);
 #endif
         }
     }
@@ -465,11 +465,11 @@ static THREAD_RETURN_TYPE alya_io_worker(void *arg) {
 
             alya_atomic_fetch_add(&pool->io_completed, 1, ALYA_ORDER_RELAXED);
         } else {
-            // Queue empty, yield
+            // Queue empty, sleep briefly to avoid burning CPU cycles
 #if defined(_WIN32)
-            SwitchToThread();
+            Sleep(2);
 #else
-            sched_yield();
+            usleep(2000);
 #endif
         }
     }
