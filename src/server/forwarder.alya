@@ -8,7 +8,7 @@ import "../common/crypto.alya" as crypto
 import "../common/protocol.alya" as proto
 import "../ffi.alya"
 
-function vpn_run_server(listen_port, passphrase)
+function vpn_run_server(listen_port, passphrase, client_thread_handler)
     alya_vpn_set_session_passphrase(passphrase)
     let key = crypto::vpn_derive_key(passphrase)
     let server_sock = net::tcp_listen(listen_port, 32)
@@ -32,9 +32,9 @@ function vpn_run_server(listen_port, passphrase)
                 let client_ip = net::tcp_peer_ip(client_sock)
                 let client_port = net::tcp_peer_port(client_sock)
                 say("[INFO] Client connected from " + client_ip + ":" + client_port)
-                # Spawn an OS thread per client — each thread gets its own Alya heap,
-                # so string state (buffers, session_key, etc.) is fully isolated.
-                thread::thread_spawn(vpn_client_thread, client_sock)
+                # Spawn via handler supplied by the importing entrypoint.
+                # Alya 0.0.14 miscompiles bare function references inside imported modules.
+                thread::thread_spawn(client_thread_handler, client_sock)
             end
         end
     end
@@ -43,7 +43,7 @@ function vpn_run_server(listen_port, passphrase)
     return 0
 end
 
-# Thread entry point: called by thread_spawn(vpn_client_thread, client_sock).
+# Thread entry point: passed from main as server::vpn_client_thread.
 # Each call runs in its own OS thread with an isolated Alya heap.
 # session_key is passed as "" — C always uses the cached key from
 # alya_vpn_set_session_passphrase (immune to Alya bump allocator corruption).

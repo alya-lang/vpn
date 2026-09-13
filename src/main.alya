@@ -189,7 +189,7 @@ function main()
         end
 
         print_banner()
-        server::vpn_run_server(port, pass)
+        server::vpn_run_server(port, pass, server::vpn_client_thread)
         return 0
     end
 
