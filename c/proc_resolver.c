@@ -66,6 +66,23 @@ typedef struct {
     ALYA_MIB_UDPROW_OWNER_PID table[1];
 } ALYA_MIB_UDPTABLE_OWNER_PID;
 
+// Internal structure matching MIB_TCP6ROW_OWNER_PID (IPv6)
+typedef struct {
+    UCHAR  ucLocalAddr[16];
+    DWORD  dwLocalScopeId;
+    DWORD  dwLocalPort;
+    UCHAR  ucRemoteAddr[16];
+    DWORD  dwRemoteScopeId;
+    DWORD  dwRemotePort;
+    DWORD  dwState;
+    DWORD  dwOwningPid;
+} ALYA_MIB_TCP6ROW_OWNER_PID;
+
+typedef struct {
+    DWORD dwNumEntries;
+    ALYA_MIB_TCP6ROW_OWNER_PID table[1];
+} ALYA_MIB_TCP6TABLE_OWNER_PID;
+
 static void extract_basename(const char *full_path, char *out_name, int max_len) {
     if (!full_path || !out_name || max_len <= 0) return;
     const char *slash = strrchr(full_path, '\\');
@@ -118,36 +135,53 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
         return 0;
     }
 
-    DWORD size = 0;
-    // Query buffer size
-    pGetTable(NULL, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
-    if (size == 0) {
-        FreeLibrary(hIpHlp);
-        return 0;
-    }
-
-    ALYA_MIB_TCPTABLE_OWNER_PID *table = (ALYA_MIB_TCPTABLE_OWNER_PID *)malloc(size);
-    if (!table) {
-        FreeLibrary(hIpHlp);
-        return 0;
-    }
-
+    uint16_t target_port_network = htons((uint16_t)local_port);
     int found = 0;
-    if (pGetTable(table, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
-        uint16_t target_port_network = htons((uint16_t)local_port);
-        for (DWORD i = 0; i < table->dwNumEntries; ++i) {
-            if (table->table[i].dwLocalPort == target_port_network) {
-                DWORD pid = table->table[i].dwOwningPid;
-                found = get_process_name_by_pid(pid, out_name, max_len);
-                break;
+
+    // --- IPv4 lookup ---
+    DWORD size = 0;
+    pGetTable(NULL, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (size > 0) {
+        ALYA_MIB_TCPTABLE_OWNER_PID *table = (ALYA_MIB_TCPTABLE_OWNER_PID *)malloc(size);
+        if (table) {
+            if (pGetTable(table, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
+                for (DWORD i = 0; i < table->dwNumEntries; ++i) {
+                    if (table->table[i].dwLocalPort == target_port_network) {
+                        DWORD pid = table->table[i].dwOwningPid;
+                        found = get_process_name_by_pid(pid, out_name, max_len);
+                        break;
+                    }
+                }
+            }
+            free(table);
+        }
+    }
+
+    // --- IPv6 fallback (curl connects via IPv6 when DNS returns AAAA records) ---
+    if (!found) {
+        DWORD size6 = 0;
+        pGetTable(NULL, &size6, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
+        if (size6 > 0) {
+            ALYA_MIB_TCP6TABLE_OWNER_PID *table6 = (ALYA_MIB_TCP6TABLE_OWNER_PID *)malloc(size6);
+            if (table6) {
+                if (pGetTable(table6, &size6, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
+                    for (DWORD i = 0; i < table6->dwNumEntries; ++i) {
+                        if (table6->table[i].dwLocalPort == target_port_network) {
+                            DWORD pid = table6->table[i].dwOwningPid;
+                            found = get_process_name_by_pid(pid, out_name, max_len);
+                            break;
+                        }
+                    }
+                }
+                free(table6);
             }
         }
     }
 
-    free(table);
     FreeLibrary(hIpHlp);
     return found;
 }
+
 
 int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len) {
     if (!out_name || max_len <= 0) return 0;
@@ -506,10 +540,15 @@ void alya_vpn_set_routing(int mode, const char *apps_csv) {
 }
 
 int alya_vpn_should_route(const char *proc_name) {
-    if (s_split_mode == 0) return 1; // all
-    if (!proc_name || !proc_name[0]) {
-        return (s_split_mode == 2) ? 1 : 0;
+    if (s_split_mode == 0) return 1; // route all
+
+    // Unknown process: privacy-safe default — route through VPN in whitelist mode,
+    // bypass VPN in blacklist mode (blacklist means "exclude these specific apps").
+    int is_unknown = (!proc_name || !proc_name[0] || strcmp(proc_name, "unknown") == 0);
+    if (is_unknown) {
+        return (s_split_mode == 2) ? 0 : 1;
     }
+
     int matched = 0;
     for (int i = 0; i < s_split_app_count; ++i) {
         if (pattern_match_c(s_split_apps[i], proc_name)) {
@@ -517,12 +556,8 @@ int alya_vpn_should_route(const char *proc_name) {
             break;
         }
     }
-    if (s_split_mode == 1) { // Whitelist: only matched apps use VPN
-        return matched ? 1 : 0;
-    }
-    if (s_split_mode == 2) { // Blacklist: matched apps bypass VPN
-        return matched ? 0 : 1;
-    }
+    if (s_split_mode == 1) return matched ? 1 : 0; // Whitelist
+    if (s_split_mode == 2) return matched ? 0 : 1; // Blacklist
     return 1;
 }
 
