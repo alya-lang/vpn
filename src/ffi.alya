@@ -53,6 +53,8 @@ extern "C"
     function alya_vpn_direct_app_at(index: i32) -> i32
     function alya_vpn_direct_dest_at(index: i32) -> i32
     function alya_vpn_direct_clear() -> void
+    function alya_vpn_pump_direct() -> i32
+
 
     # Server Channel Table
     function alya_vpn_srv_ch_set(channel_id: i32, dest_sock: i32) -> void

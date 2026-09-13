@@ -230,39 +230,13 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
             end
         end
 
-        # 4. Check Direct Connections (Bypass mode) — non-blocking
-        let di = alya_vpn_direct_count() - 1
-        while di >= 0
-            let a_sock = alya_vpn_direct_app_at(di)
-            let d_sock = alya_vpn_direct_dest_at(di)
-
-            if a_sock >= 0 and d_sock >= 0
-                if net::tcp_poll(a_sock, 0) == 1
-                    activity = 1
-                    let h = alya_vpn_sock_recv_hex(a_sock, 16384)
-                    if len(h) == 0
-                        net::tcp_close(a_sock)
-                        net::tcp_close(d_sock)
-                        alya_vpn_direct_remove(a_sock)
-                    else
-                        alya_vpn_sock_send_hex(d_sock, h, len(h))
-                    end
-                end
-
-                if alya_vpn_direct_get(a_sock) >= 0 and net::tcp_poll(d_sock, 0) == 1
-                    activity = 1
-                    let h = alya_vpn_sock_recv_hex(d_sock, 16384)
-                    if len(h) == 0
-                        net::tcp_close(a_sock)
-                        net::tcp_close(d_sock)
-                        alya_vpn_direct_remove(a_sock)
-                    else
-                        alya_vpn_sock_send_hex(a_sock, h, len(h))
-                    end
-                end
+        # 4. Check Direct Connections (Bypass mode) — native zero-copy C pump
+        if alya_vpn_direct_count() > 0
+            if alya_vpn_pump_direct() == 1
+                activity = 1
             end
-            di -= 1
         end
+
 
         # Sleep 1ms only when idle — prevents busy-wait without adding latency
         if activity == 0

@@ -18,6 +18,8 @@
 
 #if !defined(_WIN32)
 #include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -28,6 +30,7 @@
 #define SOCKET int
 #endif
 #endif
+
 
 #if defined(_MSC_VER)
 #define ALYA_THREAD_LOCAL __declspec(thread)
@@ -947,8 +950,21 @@ void alya_vpn_ch_clear(void) {
     memset(s_client_channels, 0, sizeof(s_client_channels));
 }
 
+static void set_sock_nonblocking(int sock) {
+    if (sock < 0) return;
+#if defined(_WIN32)
+    u_long mode = 1;
+    ioctlsocket((SOCKET)sock, FIONBIO, &mode);
+#else
+    int flags = fcntl(sock, F_GETFL, 0);
+    if (flags != -1) fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#endif
+}
+
 // Client Direct Connections
 void alya_vpn_direct_set(int app_sock, int dest_sock) {
+    set_sock_nonblocking(app_sock);
+    set_sock_nonblocking(dest_sock);
     int free_slot = -1;
     for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
         if (s_client_directs[i].in_use && s_client_directs[i].app_sock == app_sock) {
@@ -963,6 +979,110 @@ void alya_vpn_direct_set(int app_sock, int dest_sock) {
         s_client_directs[free_slot].dest_sock = dest_sock;
     }
 }
+
+int alya_vpn_pump_direct(void) {
+    int activity = 0;
+    char buf[32768];
+
+    for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
+        if (!s_client_directs[i].in_use) continue;
+        int a_sock = s_client_directs[i].app_sock;
+        int d_sock = s_client_directs[i].dest_sock;
+        if (a_sock < 0 || d_sock < 0) continue;
+
+        // 1. App -> Destination
+        int n1 = recv((SOCKET)a_sock, buf, sizeof(buf), 0);
+        if (n1 > 0) {
+            activity = 1;
+            int sent = 0;
+            while (sent < n1) {
+                int s = send((SOCKET)d_sock, buf + sent, n1 - sent, 0);
+                if (s <= 0) break;
+                sent += s;
+            }
+        } else if (n1 == 0) {
+            // EOF: client closed
+#if defined(_WIN32)
+            closesocket((SOCKET)a_sock);
+            closesocket((SOCKET)d_sock);
+#else
+            close(a_sock);
+            close(d_sock);
+#endif
+            s_client_directs[i].in_use = 0;
+            s_client_directs[i].app_sock = -1;
+            s_client_directs[i].dest_sock = -1;
+            continue;
+        } else {
+#if defined(_WIN32)
+            int err = WSAGetLastError();
+            if (err != WSAEWOULDBLOCK) {
+                closesocket((SOCKET)a_sock);
+                closesocket((SOCKET)d_sock);
+                s_client_directs[i].in_use = 0;
+                s_client_directs[i].app_sock = -1;
+                s_client_directs[i].dest_sock = -1;
+                continue;
+            }
+#else
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                close(a_sock);
+                close(d_sock);
+                s_client_directs[i].in_use = 0;
+                s_client_directs[i].app_sock = -1;
+                s_client_directs[i].dest_sock = -1;
+                continue;
+            }
+#endif
+        }
+
+        // 2. Destination -> App
+        int n2 = recv((SOCKET)d_sock, buf, sizeof(buf), 0);
+        if (n2 > 0) {
+            activity = 1;
+            int sent = 0;
+            while (sent < n2) {
+                int s = send((SOCKET)a_sock, buf + sent, n2 - sent, 0);
+                if (s <= 0) break;
+                sent += s;
+            }
+        } else if (n2 == 0) {
+            // EOF: destination closed
+#if defined(_WIN32)
+            closesocket((SOCKET)a_sock);
+            closesocket((SOCKET)d_sock);
+#else
+            close(a_sock);
+            close(d_sock);
+#endif
+            s_client_directs[i].in_use = 0;
+            s_client_directs[i].app_sock = -1;
+            s_client_directs[i].dest_sock = -1;
+        } else {
+#if defined(_WIN32)
+            int err = WSAGetLastError();
+            if (err != WSAEWOULDBLOCK) {
+                closesocket((SOCKET)a_sock);
+                closesocket((SOCKET)d_sock);
+                s_client_directs[i].in_use = 0;
+                s_client_directs[i].app_sock = -1;
+                s_client_directs[i].dest_sock = -1;
+            }
+#else
+            if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                close(a_sock);
+                close(d_sock);
+                s_client_directs[i].in_use = 0;
+                s_client_directs[i].app_sock = -1;
+                s_client_directs[i].dest_sock = -1;
+            }
+#endif
+        }
+    }
+
+    return activity;
+}
+
 
 int alya_vpn_direct_get(int app_sock) {
     for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {

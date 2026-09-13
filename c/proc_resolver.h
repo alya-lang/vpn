@@ -82,6 +82,13 @@ int  alya_vpn_direct_app_at(int index);
 int  alya_vpn_direct_dest_at(int index);
 void alya_vpn_direct_clear(void);
 
+// High-speed native direct pump: forwards raw binary bytes bidirectionally
+// between all active (app_sock <-> dest_sock) direct connections with zero
+// heap allocation and zero hex encoding. Returns 1 if any bytes were transferred, 0 if idle.
+int alya_vpn_pump_direct(void);
+
+
+
 // Server Channel Table: channel_id -> dest_sock
 void alya_vpn_srv_ch_set(int channel_id, int dest_sock);
 int  alya_vpn_srv_ch_get(int channel_id);
