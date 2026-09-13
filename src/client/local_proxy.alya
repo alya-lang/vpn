@@ -122,6 +122,11 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
 
                 let ok, host, port = parse_socks5_request(app_sock)
                 if ok == 1
+                    # Local loopback connections (e.g. Discord RPC 127.0.0.1:6463) must never be tunneled
+                    if host == "127.0.0.1" or host == "localhost" or host == "::1"
+                        route_vpn = 0
+                    end
+
                     if route_vpn != 0
                         say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Channel " + next_channel_id + ")")
                         let res = alya_vpn_open_client_channel(vpn_sock, next_channel_id, host, port, app_sock)

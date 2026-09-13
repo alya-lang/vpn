@@ -2003,6 +2003,8 @@ static void macos_set_service_proxy(const char *service, int enable, int port) {
         system(cmd);
         snprintf(cmd, sizeof(cmd), "networksetup -setsecurewebproxystate \"%s\" on >/dev/null 2>&1", service);
         system(cmd);
+        snprintf(cmd, sizeof(cmd), "networksetup -setproxybypassdomains \"%s\" 127.0.0.1 localhost *.local 169.254/16 >/dev/null 2>&1", service);
+        system(cmd);
     } else {
         snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxystate \"%s\" off >/dev/null 2>&1", service);
         system(cmd);
