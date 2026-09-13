@@ -90,8 +90,7 @@ function vpn_handle_client(client_sock, session_key)
                     if len(dest_hex) == 0
                         # Destination closed connection
                         say("[FORWARD] Target remote closed channel " + ch_id)
-                        let close_payload = "" + ch_id + "|EOF"
-                        let close_frame = proto::pack_frame(session_key, proto::msg_close(), close_payload)
+                        let close_frame = proto::pack_frame(session_key, proto::msg_close(), proto::pack_close_payload(ch_id, 0))
                         if close_frame != null
                             net::tcp_send(client_sock, close_frame)
                         end
