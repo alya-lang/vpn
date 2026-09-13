@@ -52,6 +52,11 @@ jobs:
       - name: Set up Alya Compiler (macOS x86_64 via Rosetta)
         if: matrix.target.os-name == 'macos-x64'
         run: |
+          sudo tee /usr/local/bin/gcc << 'EOF'
+          #!/bin/bash
+          exec /usr/bin/clang -arch x86_64 "$@"
+          EOF
+          sudo chmod +x /usr/local/bin/gcc
           curl -sSL -o alyac-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.14/alyac-v0.0.14-x86_64-macos.tar.gz
           tar -xzf alyac-x64.tar.gz
           sudo cp alyac-v0.0.14-x86_64-macos/alyac /usr/local/bin/alyac
