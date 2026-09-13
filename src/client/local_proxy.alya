@@ -149,50 +149,25 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
             if app_sock >= 0
                 if net::tcp_poll(app_sock, 0) == 1
                     activity = 1
-                    # Acquire buffer and submit read to I/O worker
-                    let buffer_id = alya_vpn_buffer_acquire()
-                    if buffer_id >= 0
-                        let read_res = tpool::thread_pool_submit_io_read(app_sock, buffer_id, 16384, ch_id)
-                        # Note: In real implementation, would wait for completion and process
-                        # For now, fallback to synchronous path
-                        let app_hex = alya_vpn_sock_recv_hex(app_sock, 16384)
-                        let hlen = len(app_hex)
-                        alya_vpn_buffer_release(buffer_id)
-                        if hlen == 0
-                            # App closed connection
-                            let close_frame = proto::pack_frame(session_key, proto::msg_close(), "" + ch_id)
-                            if close_frame != null
-                                net::tcp_send(vpn_sock, close_frame)
-                            end
-                            net::tcp_close(app_sock)
-                            alya_vpn_ch_remove(ch_id)
-                        else
-                            let data_payload = proto::pack_data_payload(ch_id, app_hex)
-                            let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
-                            if data_frame != null
-                                net::tcp_send(vpn_sock, data_frame)
-                            end
+                    let app_hex = alya_vpn_sock_recv_hex(app_sock, 16384)
+                    let hlen = len(app_hex)
+                    if hlen == 0
+                        # App closed connection
+                        let close_frame = proto::pack_frame(session_key, proto::msg_close(), proto::pack_close_payload(ch_id, 0))
+                        if close_frame != null
+                            net::tcp_send(vpn_sock, close_frame)
                         end
+                        net::tcp_close(app_sock)
+                        alya_vpn_ch_remove(ch_id)
                     else
-                        # Pool exhausted, fallback to synchronous
-                        let app_hex = alya_vpn_sock_recv_hex(app_sock, 16384)
-                        let hlen = len(app_hex)
-                        if hlen == 0
-                            let close_frame = proto::pack_frame(session_key, proto::msg_close(), "" + ch_id)
-                            if close_frame != null
-                                net::tcp_send(vpn_sock, close_frame)
-                            end
-                            net::tcp_close(app_sock)
-                            alya_vpn_ch_remove(ch_id)
-                        else
-                            let data_payload = proto::pack_data_payload(ch_id, app_hex)
-                            let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
-                            if data_frame != null
-                                net::tcp_send(vpn_sock, data_frame)
-                            end
+                        let data_payload = proto::pack_data_payload(ch_id, app_hex)
+                        let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
+                        if data_frame != null
+                            net::tcp_send(vpn_sock, data_frame)
                         end
                     end
                 end
+
             end
             ci -= 1
         end
