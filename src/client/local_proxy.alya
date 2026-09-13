@@ -87,13 +87,11 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
     tpool::thread_pool_assign_channel_worker(-1, 0)  # Special channel ID for VPN socket
 
     let next_channel_id = 1
-    # Persistent buffer for VPN frames — avoids repeated string concatenation in hot loop
-    let vpn_buffer = ""
 
     while 1
         let activity = 0
 
-        # 1. Accept new local SOCKS5 connections (non-blocking) - submit to I/O worker
+        # 1. Accept new local SOCKS5 connections (non-blocking)
         let poll_proxy = net::tcp_poll(proxy_sock, 0)
         if poll_proxy == 1
             activity = 1
@@ -112,24 +110,17 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
                 if ok == 1
                     if route_vpn != 0
                         say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Channel " + next_channel_id + ")")
-                        let req_payload = proto::pack_connect_req_payload(next_channel_id, proto::proto_tcp(), host, port)
-                        let req_frame = proto::pack_frame(session_key, proto::msg_connect_req(), req_payload)
-                        if req_frame != null
-                            net::tcp_send(vpn_sock, req_frame)
-                            alya_vpn_ch_set(next_channel_id, app_sock)
-                            # Assign channel to I/O worker for affinity
-                            tpool::thread_pool_auto_assign_channel(next_channel_id, 8)
-                            next_channel_id += 1
-                        else
+                        let res = alya_vpn_open_client_channel(vpn_sock, next_channel_id, host, port, app_sock)
+                        if res < 0
                             net::tcp_close(app_sock)
+                        else
+                            next_channel_id += 1
                         end
                     else
                         say("[DIRECT] [" + proc_name + "] -> " + host + ":" + port + " (Bypassing VPN)")
                         let dest_sock = net::tcp_connect(host, port)
                         if dest_sock >= 0
                             alya_vpn_direct_set(app_sock, dest_sock)
-                            # Assign both sockets to same I/O worker
-                            tpool::thread_pool_auto_assign_channel(next_channel_id, 8)
                         else
                             net::tcp_close(app_sock)
                         end
@@ -140,103 +131,27 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
             end
         end
 
-        # 2. Check all active VPN tunnel apps (App -> Server) — non-blocking
-        # Submit reads to I/O workers, encryption to crypto workers
-        let ci = alya_vpn_ch_count() - 1
-        while ci >= 0
-            let ch_id = alya_vpn_ch_id_at(ci)
-            let app_sock = alya_vpn_ch_sock_at(ci)
-            if app_sock >= 0
-                if net::tcp_poll(app_sock, 0) == 1
-                    activity = 1
-                    let app_hex = alya_vpn_sock_recv_hex(app_sock, 16384)
-                    let hlen = len(app_hex)
-                    if hlen == 0
-                        # App closed connection
-                        let close_frame = proto::pack_frame(session_key, proto::msg_close(), proto::pack_close_payload(ch_id, 0))
-                        if close_frame != null
-                            net::tcp_send(vpn_sock, close_frame)
-                        end
-                        net::tcp_close(app_sock)
-                        alya_vpn_ch_remove(ch_id)
-                    else
-                        let data_payload = proto::pack_data_payload(ch_id, app_hex)
-                        let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
-                        if data_frame != null
-                            net::tcp_send(vpn_sock, data_frame)
-                        end
-                    end
-                end
-
-            end
-            ci -= 1
-        end
-
-        # 3. Check VPN Server responses (Server -> App) — non-blocking
-        if net::tcp_poll(vpn_sock, 0) == 1
+        # 2. Check VPN Tunnel (High-speed zero-copy native pump in C)
+        let vpn_res = alya_vpn_pump_client_vpn(vpn_sock)
+        if vpn_res > 0
             activity = 1
-            let chunk = net::tcp_recv(vpn_sock, 32768)
-            if len(chunk) == 0
-                say("[WARN] VPN server connection lost. Reconnecting...")
-                net::tcp_close(vpn_sock)
-                vpn_sock = net::tcp_connect(server_host, server_port)
-                if vpn_sock < 0
-                    say("[ERROR] Failed to reconnect to VPN server.")
-                    break
-                end
-                vpn_buffer = ""
-            else
-                # Append new chunk to persistent buffer (single allocation per recv, not per frame)
-                vpn_buffer += chunk
-
-                while 1
-                    let nl_idx = proto::find_char(vpn_buffer, "\n")
-                    if nl_idx < 0
-                        break
-                    end
-                    let frame_line = vpn_buffer.substring(0, nl_idx)
-                    vpn_buffer = vpn_buffer.substring(nl_idx + 1)
-
-                    let msg_type, payload = proto::unpack_frame(session_key, frame_line)
-                    if msg_type == proto::msg_data() and payload != null
-                        let ok, ch_id, hex_data = proto::unpack_data_payload(payload)
-                        if ok == 1
-                            let app_sock = alya_vpn_ch_get(ch_id)
-                            if app_sock >= 0
-                                alya_vpn_sock_send_hex(app_sock, hex_data, len(hex_data))
-                            end
-                        end
-                    else if msg_type == proto::msg_close() and payload != null
-                        let ok, ch_id, reason = proto::unpack_close_payload(payload)
-                        if ok == 1
-                            let app_sock = alya_vpn_ch_get(ch_id)
-                            if app_sock >= 0
-                                net::tcp_close(app_sock)
-                                alya_vpn_ch_remove(ch_id)
-                            end
-                        end
-                    else if msg_type == proto::msg_connect_resp() and payload != null
-                        let ok, ch_id, status, msg = proto::unpack_connect_resp_payload(payload)
-                        if ok == 1 and status != proto::status_ok()
-                            let app_sock = alya_vpn_ch_get(ch_id)
-                            if app_sock >= 0
-                                say("[TUNNEL] Target connection refused on channel " + ch_id + ": " + msg)
-                                net::tcp_close(app_sock)
-                                alya_vpn_ch_remove(ch_id)
-                            end
-                        end
-                    end
-                end
+        else if vpn_res < 0
+            say("[WARN] VPN server connection lost. Reconnecting...")
+            net::tcp_close(vpn_sock)
+            vpn_sock = net::tcp_connect(server_host, server_port)
+            if vpn_sock < 0
+                say("[ERROR] Failed to reconnect to VPN server.")
+                break
             end
+            alya_vpn_ch_clear()
         end
 
-        # 4. Check Direct Connections (Bypass mode) — native zero-copy C pump
+        # 3. Check Direct Connections (Bypass mode) — native zero-copy C pump
         if alya_vpn_direct_count() > 0
             if alya_vpn_pump_direct() == 1
                 activity = 1
             end
         end
-
 
         # Sleep 1ms only when idle — prevents busy-wait without adding latency
         if activity == 0

@@ -769,3 +769,121 @@ const char *alya_vpn_unpack_frame_bin(const char *key_hex, const uint8_t *frame,
     return s_plain_buf_bin;
 }
 
+// ============================================================================
+// AV02 Binary Wire Protocol Implementation
+// ============================================================================
+
+int alya_vpn_pack_frame_av02(
+    uint8_t type,
+    uint32_t channel_id,
+    const uint8_t *payload,
+    uint32_t payload_len,
+    uint8_t *out_frame,
+    int max_out
+) {
+    if (!out_frame || (int)(ALYA_AV02_HEADER_LEN + payload_len) > max_out) {
+        return -1;
+    }
+    if (!s_has_session_key) {
+        return -1;
+    }
+
+    const uint8_t *key = s_session_key_bin;
+    uint8_t nonce[12];
+    get_random_bytes(nonce, 12);
+
+    // 1. One-time Poly1305 key via ChaCha20 block 0
+    uint8_t poly_key[32] = {0};
+    chacha20_xor(key, nonce, 0, poly_key, poly_key, 32);
+
+    // 2. Encrypt plaintext starting at counter 1 directly into out_frame + 40
+    if (payload_len > 0 && payload) {
+        chacha20_xor(key, nonce, 1, payload, out_frame + ALYA_AV02_HEADER_LEN, (size_t)payload_len);
+    }
+
+    // 3. Compute Poly1305 MAC over ciphertext
+    uint8_t tag[16];
+    poly1305_mac(out_frame + ALYA_AV02_HEADER_LEN, (size_t)payload_len, poly_key, tag);
+
+    // 4. Fill 40-byte header
+    out_frame[0] = ALYA_AV02_MAGIC_0;
+    out_frame[1] = ALYA_AV02_MAGIC_1;
+    out_frame[2] = ALYA_AV02_VERSION;
+    out_frame[3] = type;
+    out_frame[4] = (uint8_t)((channel_id >> 24) & 0xFF);
+    out_frame[5] = (uint8_t)((channel_id >> 16) & 0xFF);
+    out_frame[6] = (uint8_t)((channel_id >> 8) & 0xFF);
+    out_frame[7] = (uint8_t)(channel_id & 0xFF);
+    out_frame[8] = (uint8_t)((payload_len >> 24) & 0xFF);
+    out_frame[9] = (uint8_t)((payload_len >> 16) & 0xFF);
+    out_frame[10] = (uint8_t)((payload_len >> 8) & 0xFF);
+    out_frame[11] = (uint8_t)(payload_len & 0xFF);
+    memcpy(&out_frame[12], nonce, 12);
+    memcpy(&out_frame[24], tag, 16);
+
+    return (int)(ALYA_AV02_HEADER_LEN + payload_len);
+}
+
+int alya_vpn_unpack_frame_av02(
+    const uint8_t *frame,
+    int frame_len,
+    uint8_t *out_type,
+    uint32_t *out_channel_id,
+    uint8_t *out_plain,
+    int max_plain,
+    uint32_t *out_payload_len
+) {
+    if (!frame || frame_len < ALYA_AV02_HEADER_LEN) {
+        return -2;
+    }
+    if (frame[0] != ALYA_AV02_MAGIC_0 || frame[1] != ALYA_AV02_MAGIC_1 || frame[2] != ALYA_AV02_VERSION) {
+        return -2;
+    }
+    if (!s_has_session_key) {
+        return -2;
+    }
+
+    uint8_t type = frame[3];
+    uint32_t ch_id = ((uint32_t)frame[4] << 24) | ((uint32_t)frame[5] << 16) |
+                     ((uint32_t)frame[6] << 8)  | (uint32_t)frame[7];
+    uint32_t payload_len = ((uint32_t)frame[8] << 24) | ((uint32_t)frame[9] << 16) |
+                           ((uint32_t)frame[10] << 8) | (uint32_t)frame[11];
+
+    if (frame_len < (int)(ALYA_AV02_HEADER_LEN + payload_len)) {
+        return -2;
+    }
+    if ((int)payload_len > max_plain) {
+        return -2;
+    }
+
+    const uint8_t *nonce = &frame[12];
+    const uint8_t *expected_tag = &frame[24];
+    const uint8_t *ciphertext = &frame[ALYA_AV02_HEADER_LEN];
+
+    // 1. One-time Poly1305 key via ChaCha20 block 0
+    uint8_t poly_key[32] = {0};
+    chacha20_xor(s_session_key_bin, nonce, 0, poly_key, poly_key, 32);
+
+    // 2. Compute and verify Poly1305 MAC
+    uint8_t computed_tag[16];
+    poly1305_mac(ciphertext, (size_t)payload_len, poly_key, computed_tag);
+
+    int diff = 0;
+    for (int i = 0; i < 16; ++i) {
+        diff |= (computed_tag[i] ^ expected_tag[i]);
+    }
+    if (diff != 0) {
+        return -1; // MAC verification failure
+    }
+
+    // 3. Decrypt ciphertext starting at counter 1 directly into out_plain
+    if (payload_len > 0 && out_plain) {
+        chacha20_xor(s_session_key_bin, nonce, 1, ciphertext, out_plain, (size_t)payload_len);
+    }
+
+    if (out_type) *out_type = type;
+    if (out_channel_id) *out_channel_id = ch_id;
+    if (out_payload_len) *out_payload_len = payload_len;
+    return 0;
+}
+

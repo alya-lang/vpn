@@ -64,6 +64,12 @@ extern "C"
     function alya_vpn_srv_ch_id_at(index: i32) -> i32
     function alya_vpn_srv_ch_sock_at(index: i32) -> i32
     function alya_vpn_srv_ch_clear() -> void
+    function alya_vpn_srv_close_all() -> void
+
+    # Native High-Speed VPN Tunnel Pumps (Zero Alya Allocations, Raw Binary Streaming)
+    function alya_vpn_open_client_channel(vpn_sock: i32, channel_id: i32, host: str, port: i32, app_sock: i32) -> i32
+    function alya_vpn_pump_client_vpn(vpn_sock: i32) -> i32
+    function alya_vpn_pump_server_vpn(client_sock: i32) -> i32
 
     # ============================================================================
     # Thread Pool API

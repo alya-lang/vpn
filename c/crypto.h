@@ -107,6 +107,42 @@ int alya_vpn_has_session_key(void);
 // Get cached session key binary (32 bytes)
 const uint8_t *alya_vpn_get_session_key_bin(void);
 
+// ============================================================================
+// AV02 BINARY WIRE PROTOCOL (High-Performance Zero-Copy)
+// ============================================================================
+#define ALYA_AV02_MAGIC_0 'A'
+#define ALYA_AV02_MAGIC_1 'V'
+#define ALYA_AV02_VERSION 0x02
+#define ALYA_AV02_HEADER_LEN 40
+
+#define ALYA_AV02_MSG_HANDSHAKE_REQ  1
+#define ALYA_AV02_MSG_HANDSHAKE_RESP 2
+#define ALYA_AV02_MSG_CONNECT_REQ    3
+#define ALYA_AV02_MSG_CONNECT_RESP   4
+#define ALYA_AV02_MSG_DATA           5
+#define ALYA_AV02_MSG_CLOSE          6
+#define ALYA_AV02_MSG_PING           7
+#define ALYA_AV02_MSG_PONG           8
+
+int alya_vpn_pack_frame_av02(
+    uint8_t type,
+    uint32_t channel_id,
+    const uint8_t *payload,
+    uint32_t payload_len,
+    uint8_t *out_frame,
+    int max_out
+);
+
+int alya_vpn_unpack_frame_av02(
+    const uint8_t *frame,
+    int frame_len,
+    uint8_t *out_type,
+    uint32_t *out_channel_id,
+    uint8_t *out_plain,
+    int max_plain,
+    uint32_t *out_payload_len
+);
+
 #ifdef __cplusplus
 }
 #endif

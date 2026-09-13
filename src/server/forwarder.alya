@@ -72,70 +72,14 @@ end
 function vpn_handle_client(client_sock, session_key)
     alya_vpn_srv_ch_clear()
 
-    let running = 1
-    let buffer = ""
-
-    while running == 1
+    while 1
         let activity = 0
-
-        # 1. Check if client sent data (non-blocking)
-        if net::tcp_poll(client_sock, 0) == 1
-            let chunk = net::tcp_recv(client_sock, 32768)
-            if len(chunk) == 0
-                running = 0
-                break
-            end
+        let res = alya_vpn_pump_server_vpn(client_sock)
+        if res > 0
             activity = 1
-            buffer += chunk
-
-            # Process full newline-delimited frames
-            while 1
-                let nl_idx = proto::find_char(buffer, "\n")
-                if nl_idx < 0
-                    break
-                end
-
-                let frame_line = buffer.substring(0, nl_idx)
-                buffer = buffer.substring(nl_idx + 1)
-
-                let msg_type, payload = proto::unpack_frame(session_key, frame_line)
-                if msg_type == 0 or payload == null
-                    say("[WARN] Authentication/Integrity check failed for incoming frame, dropping")
-                else
-                    vpn_process_client_message(client_sock, session_key, msg_type, payload)
-                end
-            end
-        end
-
-        # 2. Check active destination channels for incoming response data (non-blocking)
-        let si = alya_vpn_srv_ch_count() - 1
-        while si >= 0
-            let ch_id = alya_vpn_srv_ch_id_at(si)
-            let dest_sock = alya_vpn_srv_ch_sock_at(si)
-            if dest_sock >= 0
-                if net::tcp_poll(dest_sock, 0) == 1
-                    activity = 1
-                    let dest_hex = alya_vpn_sock_recv_hex(dest_sock, 16384)
-                    if len(dest_hex) == 0
-                        # Destination closed connection
-                        say("[FORWARD] Target remote closed channel " + ch_id)
-                        let close_frame = proto::pack_frame(session_key, proto::msg_close(), proto::pack_close_payload(ch_id, 0))
-                        if close_frame != null
-                            net::tcp_send(client_sock, close_frame)
-                        end
-                        net::tcp_close(dest_sock)
-                        alya_vpn_srv_ch_remove(ch_id)
-                    else
-                        # Encrypt and forward received data back to client
-                        let data_payload = proto::pack_data_payload(ch_id, dest_hex)
-                        let data_frame = proto::pack_frame(session_key, proto::msg_data(), data_payload)
-                        if data_frame != null
-                            net::tcp_send(client_sock, data_frame)
-                        end
-                    end
-                end
-            end
-            si -= 1
+        else if res < 0
+            # Client disconnected
+            break
         end
 
         # Sleep 1ms only when idle — prevents busy-wait without adding latency
@@ -144,17 +88,7 @@ function vpn_handle_client(client_sock, session_key)
         end
     end
 
-    # Clean up any open channels on client disconnect
-    let total = alya_vpn_srv_ch_count()
-    let ci = 0
-    while ci < total
-        let s = alya_vpn_srv_ch_sock_at(ci)
-        if s >= 0
-            net::tcp_close(s)
-        end
-        ci += 1
-    end
-    alya_vpn_srv_ch_clear()
+    alya_vpn_srv_close_all()
     net::tcp_close(client_sock)
 end
 
