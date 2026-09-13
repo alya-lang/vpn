@@ -1067,11 +1067,20 @@ void alya_vpn_add_routing_app(const char *app_name) {
 int alya_vpn_should_route(const char *proc_name) {
     if (s_split_mode == 0) return 1; // route all
 
-    // Unknown process: privacy-safe default — route through VPN in whitelist mode,
-    // bypass VPN in blacklist mode (blacklist means "exclude these specific apps").
+    // System DNS resolvers must ALWAYS be tunneled so DNS resolution never leaks or gets blocked
+    // by ISP / BTK DPI (e.g. mDNSResponder DoH/DoT to 1.1.1.1 / 8.8.8.8, systemd-resolved, etc.)
+    if (proc_name && (ALYA_STRICMP(proc_name, "mDNSResponder") == 0 ||
+                      ALYA_STRICMP(proc_name, "systemd-resolved") == 0 ||
+                      ALYA_STRICMP(proc_name, "dnsmasq") == 0 ||
+                      ALYA_STRICMP(proc_name, "named") == 0)) {
+        return 1;
+    }
+
+    // In whitelist mode (1), unknown defaults to bypass (0) unless overridden by domain later.
+    // In blacklist mode (2), unknown defaults to route (1).
     int is_unknown = (!proc_name || !proc_name[0] || strcmp(proc_name, "unknown") == 0);
     if (is_unknown) {
-        return (s_split_mode == 2) ? 0 : 1;
+        return (s_split_mode == 1) ? 0 : 1;
     }
 
     int matched = 0;
@@ -1084,6 +1093,59 @@ int alya_vpn_should_route(const char *proc_name) {
     if (s_split_mode == 1) return matched ? 1 : 0; // Whitelist
     if (s_split_mode == 2) return matched ? 0 : 1; // Blacklist
     return 1;
+}
+
+int alya_vpn_should_route_host(const char *host, int port) {
+    if (s_split_mode == 0) return 1; // route all
+    if (!host || !host[0]) return -1;
+
+    // 1. Local loopback must ALWAYS bypass VPN
+    if (strcmp(host, "127.0.0.1") == 0 || strcmp(host, "localhost") == 0 ||
+        strcmp(host, "::1") == 0 || strcmp(host, "0.0.0.0") == 0) {
+        return 0;
+    }
+
+    // 2. DNS queries must ALWAYS route via VPN to prevent censorship / tampering
+    if (port == 53 || port == 853 ||
+        strcmp(host, "1.1.1.1") == 0 || strcmp(host, "1.0.0.1") == 0 ||
+        strcmp(host, "8.8.8.8") == 0 || strcmp(host, "8.8.4.4") == 0 ||
+        strcmp(host, "one.one.one.one") == 0) {
+        return 1;
+    }
+
+    // 3. Match host against configured split apps (e.g. "discord" in "updates.discord.com")
+    char host_lower[256];
+    size_t hlen = strlen(host);
+    if (hlen >= sizeof(host_lower)) hlen = sizeof(host_lower) - 1;
+    for (size_t i = 0; i < hlen; ++i) host_lower[i] = (char)tolower((unsigned char)host[i]);
+    host_lower[hlen] = '\0';
+
+    int matched = 0;
+    for (int i = 0; i < s_split_app_count; ++i) {
+        char app_lower[64];
+        size_t alen = strlen(s_split_apps[i]);
+        if (alen >= sizeof(app_lower)) alen = sizeof(app_lower) - 1;
+        for (size_t j = 0; j < alen; ++j) app_lower[j] = (char)tolower((unsigned char)s_split_apps[i][j]);
+        app_lower[alen] = '\0';
+
+        // Strip .exe if present
+        if (alen > 4 && strcmp(app_lower + alen - 4, ".exe") == 0) {
+            app_lower[alen - 4] = '\0';
+            alen -= 4;
+        }
+
+        // Substring match: e.g. "discord" matches "updates.discord.com", "gateway.discord.gg", "cdn.discordapp.com"
+        if (alen > 2 && strstr(host_lower, app_lower) != NULL) {
+            matched = 1;
+            break;
+        }
+    }
+
+    if (matched) {
+        return (s_split_mode == 1) ? 1 : 0;
+    }
+
+    return -1; // No domain-specific override -> use process decision
 }
 
 // UPDATED: Now takes both proxy_local_port (the port the VPN proxy listens on)
@@ -1159,7 +1221,7 @@ static int is_would_block(void) {
     int err = WSAGetLastError();
     return (err == WSAEWOULDBLOCK);
 #else
-    return (errno == EAGAIN || errno == EWOULDBLOCK);
+    return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR);
 #endif
 }
 

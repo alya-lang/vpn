@@ -13,9 +13,23 @@ io_threads = 2
 #   "all"     - Route all network traffic through the encrypted VPN tunnel.
 #   "include" - (Whitelist) Only specified applications route through VPN; all others use direct local internet.
 #   "exclude" - (Blacklist) Specified applications bypass VPN (direct internet); all other apps route through VPN.
-mode = "exclude"
+mode = "include"
 apps = [
+    "Speedtest.exe",
+    "speedtest.exe",
+    "Speedtest",
+    "speedtest",
     "Discord.exe",
+    "discord.exe",
+    "Discord",
     "discord",
-    "steamwebhelper.exe"
+    "Discord Helper",
+    "discord helper",
+    "mDNSResponder",
+    "Chrome.exe",
+    "Chrome",
+    "chrome.exe",
+    "chrome",
+    "curl.exe",
+    "curl"
 ]

@@ -10,7 +10,7 @@ import "./common/protocol.alya" as proto
 
 function print_banner()
     say("=================================================================")
-    say("           A L Y A   V P N   T U N N E L   (v0.1.7)              ")
+    say("           A L Y A   V P N   T U N N E L   (v0.1.8)              ")
     say("   High-Performance ChaCha20-Poly1305 Split-Tunneling Network    ")
     say("=================================================================")
 end
@@ -380,7 +380,13 @@ function main()
         end
 
         print_banner()
-        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list, auto_sys_proxy, crypto_threads, io_threads)
+        let tp_init = tpool::thread_pool_init(crypto_threads, io_threads)
+        if tp_init != 0
+            say("[ERROR] Failed to initialize thread pool")
+            return 1
+        end
+        say("[INFO] Thread pool initialized: " + crypto_threads + " crypto workers, " + io_threads + " I/O workers")
+        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list, auto_sys_proxy)
         return 0
     end
 

@@ -22,16 +22,8 @@ function parse_socks5_request(client_sock)
 end
 
 # Starts the local SOCKS5 proxy and routes traffic according to split-tunneling configuration
-function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps, auto_sys_proxy, crypto_threads, io_threads)
-    # 1. Initialize thread pool
-    let tp_init = tpool::thread_pool_init(crypto_threads, io_threads)
-    if tp_init != 0
-        say("[ERROR] Failed to initialize thread pool")
-        return 1
-    end
-    say("[INFO] Thread pool initialized: " + crypto_threads + " crypto workers, " + io_threads + " I/O workers")
-
-    # 2. Initialize native session key in C
+function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps, auto_sys_proxy)
+    # 1. Initialize native session key in C
     alya_vpn_set_session_passphrase(passphrase)
     let session_key = crypto::vpn_derive_key(passphrase)
 
@@ -131,6 +123,13 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
                     # Local loopback connections (e.g. Discord RPC 127.0.0.1:6463) must never be tunneled
                     if host == "127.0.0.1" or host == "localhost" or host == "::1"
                         route_vpn = 0
+                    else
+                        let host_route = alya_vpn_should_route_host(host, port)
+                        if host_route == 1
+                            route_vpn = 1
+                        else if host_route == 0
+                            route_vpn = 0
+                        end
                     end
 
                     if route_vpn != 0
