@@ -1587,9 +1587,6 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
             continue;
         }
 
-        uint8_t type = s_vpn_client_rx[3];
-        uint32_t ch_id = ((uint32_t)s_vpn_client_rx[4] << 24) | ((uint32_t)s_vpn_client_rx[5] << 16) |
-                         ((uint32_t)s_vpn_client_rx[6] << 8)  | (uint32_t)s_vpn_client_rx[7];
         uint32_t payload_len = ((uint32_t)s_vpn_client_rx[8] << 24) | ((uint32_t)s_vpn_client_rx[9] << 16) |
                                ((uint32_t)s_vpn_client_rx[10] << 8) | (uint32_t)s_vpn_client_rx[11];
 

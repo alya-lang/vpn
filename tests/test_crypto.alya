@@ -27,7 +27,11 @@ function main()
     runner_assert_str_eq(r, decrypted, original_payload, "Decrypted text must match original payload")
 
     # 4. Tamper detection (Poly1305 MAC failure)
-    let tampered_cipher = "f" + cipher.substring(1)
+    let flip_ch = "0"
+    if char_at(cipher, 0) == "0"
+        flip_ch = "1"
+    end
+    let tampered_cipher = flip_ch + cipher.substring(1)
 
     let tampered_res = vpn_crypto::vpn_decrypt(key, nonce1, tampered_cipher, tag)
     runner_assert_eq(r, tampered_res, null, "Tampered ciphertext must fail authentication and return null")
