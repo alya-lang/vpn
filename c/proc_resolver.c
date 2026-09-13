@@ -517,6 +517,15 @@ static int pattern_match_c(const char *pattern, const char *text) {
     return 0;
 }
 
+void alya_vpn_sleep_ms(int ms) {
+    if (ms <= 0) return;
+#if defined(_WIN32)
+    Sleep((DWORD)ms);
+#else
+    usleep((useconds_t)ms * 1000);
+#endif
+}
+
 void alya_vpn_set_routing(int mode, const char *apps_csv) {
     s_split_mode = mode;
     s_split_app_count = 0;

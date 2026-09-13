@@ -76,9 +76,12 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
     let vpn_buffer = ""
 
     while 1
-        # 1. Accept new local SOCKS5 connections
-        let poll_proxy = net::tcp_poll(proxy_sock, 2)
+        let activity = 0
+
+        # 1. Accept new local SOCKS5 connections (non-blocking)
+        let poll_proxy = net::tcp_poll(proxy_sock, 0)
         if poll_proxy == 1
+            activity = 1
             let app_sock = net::tcp_accept(proxy_sock)
             if app_sock >= 0
                 let peer_port = net::tcp_peer_port(app_sock)
@@ -117,15 +120,15 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
             end
         end
 
-        # 2. Check all active VPN tunnel apps (Chrome -> Server)
+        # 2. Check all active VPN tunnel apps (App -> Server) — non-blocking
         let ci = alya_vpn_ch_count() - 1
         while ci >= 0
             let ch_id = alya_vpn_ch_id_at(ci)
             let app_sock = alya_vpn_ch_sock_at(ci)
             if app_sock >= 0
-                let p_app = net::tcp_poll(app_sock, 1)
-                if p_app == 1
-                    let app_hex = alya_vpn_sock_recv_hex(app_sock, 4096)
+                if net::tcp_poll(app_sock, 0) == 1
+                    activity = 1
+                    let app_hex = alya_vpn_sock_recv_hex(app_sock, 16384)
                     let hlen = len(app_hex)
                     if hlen == 0
                         # App closed connection
@@ -147,10 +150,10 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
             ci -= 1
         end
 
-        # 3. Check VPN Server responses (Server -> Chrome)
-        let p_vpn = net::tcp_poll(vpn_sock, 2)
-        if p_vpn == 1
-            let chunk = net::tcp_recv(vpn_sock, 8192)
+        # 3. Check VPN Server responses (Server -> App) — non-blocking
+        if net::tcp_poll(vpn_sock, 0) == 1
+            activity = 1
+            let chunk = net::tcp_recv(vpn_sock, 32768)
             if len(chunk) == 0
                 say("[WARN] VPN server connection lost. Reconnecting...")
                 net::tcp_close(vpn_sock)
@@ -203,15 +206,16 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
             end
         end
 
-        # 4. Check Direct Connections (Bypass mode)
+        # 4. Check Direct Connections (Bypass mode) — non-blocking
         let di = alya_vpn_direct_count() - 1
         while di >= 0
             let a_sock = alya_vpn_direct_app_at(di)
             let d_sock = alya_vpn_direct_dest_at(di)
 
             if a_sock >= 0 and d_sock >= 0
-                if net::tcp_poll(a_sock, 1) == 1
-                    let h = alya_vpn_sock_recv_hex(a_sock, 4096)
+                if net::tcp_poll(a_sock, 0) == 1
+                    activity = 1
+                    let h = alya_vpn_sock_recv_hex(a_sock, 16384)
                     if len(h) == 0
                         net::tcp_close(a_sock)
                         net::tcp_close(d_sock)
@@ -221,8 +225,9 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
                     end
                 end
 
-                if alya_vpn_direct_get(a_sock) >= 0 and net::tcp_poll(d_sock, 1) == 1
-                    let h = alya_vpn_sock_recv_hex(d_sock, 4096)
+                if alya_vpn_direct_get(a_sock) >= 0 and net::tcp_poll(d_sock, 0) == 1
+                    activity = 1
+                    let h = alya_vpn_sock_recv_hex(d_sock, 16384)
                     if len(h) == 0
                         net::tcp_close(a_sock)
                         net::tcp_close(d_sock)
@@ -233,6 +238,11 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
                 end
             end
             di -= 1
+        end
+
+        # Sleep 1ms only when idle — prevents busy-wait without adding latency
+        if activity == 0
+            alya_vpn_sleep_ms(1)
         end
     end
 

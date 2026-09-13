@@ -49,14 +49,16 @@ function vpn_handle_client(client_sock, session_key)
     let buffer = ""
 
     while running == 1
-        # 1. Check if client sent data
-        let poll_client = net::tcp_poll(client_sock, 10)
-        if poll_client == 1
-            let chunk = net::tcp_recv(client_sock, 8192)
+        let activity = 0
+
+        # 1. Check if client sent data (non-blocking)
+        if net::tcp_poll(client_sock, 0) == 1
+            let chunk = net::tcp_recv(client_sock, 32768)
             if len(chunk) == 0
                 running = 0
                 break
             end
+            activity = 1
             buffer += chunk
 
             # Process full newline-delimited frames
@@ -78,15 +80,15 @@ function vpn_handle_client(client_sock, session_key)
             end
         end
 
-        # 2. Check active destination channels for incoming response data
+        # 2. Check active destination channels for incoming response data (non-blocking)
         let si = alya_vpn_srv_ch_count() - 1
         while si >= 0
             let ch_id = alya_vpn_srv_ch_id_at(si)
             let dest_sock = alya_vpn_srv_ch_sock_at(si)
             if dest_sock >= 0
-                let poll_dest = net::tcp_poll(dest_sock, 5)
-                if poll_dest == 1
-                    let dest_hex = alya_vpn_sock_recv_hex(dest_sock, 4096)
+                if net::tcp_poll(dest_sock, 0) == 1
+                    activity = 1
+                    let dest_hex = alya_vpn_sock_recv_hex(dest_sock, 16384)
                     if len(dest_hex) == 0
                         # Destination closed connection
                         say("[FORWARD] Target remote closed channel " + ch_id)
@@ -107,6 +109,11 @@ function vpn_handle_client(client_sock, session_key)
                 end
             end
             si -= 1
+        end
+
+        # Sleep 1ms only when idle — prevents busy-wait without adding latency
+        if activity == 0
+            alya_vpn_sleep_ms(1)
         end
     end
 

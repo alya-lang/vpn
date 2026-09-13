@@ -48,6 +48,9 @@ int alya_vpn_check_peer_route(int peer_port, char *out_proc_name, int max_len);
 // Directly checks if a process name matches configured routing rules.
 int alya_vpn_should_route(const char *proc_name);
 
+// Cross-platform idle sleep (ms). Use in event loops when no activity detected.
+void alya_vpn_sleep_ms(int ms);
+
 // ============================================================================
 // Native Channel & Direct Connection Tables (O(1) lookup, 0 heap allocations)
 // ============================================================================
