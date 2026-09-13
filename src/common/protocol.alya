@@ -166,51 +166,25 @@ function unpack_close_payload(payload)
     return 1, parse_number(parts[0]), reason
 end
 
-# Packs an authenticated and encrypted envelope frame (BINARY FORMAT)
-# Frame structure: [Magic: 2 bytes 'A','V'] [Version: 1 byte 0x01] [Type: 1 byte] [Nonce: 12 bytes] [Tag: 16 bytes] [Ciphertext: N bytes]
-# Total header: 32 bytes, Payload: N bytes = 1x overhead vs 2x for legacy hex format
+# Packs an authenticated and encrypted envelope frame
+# Envelope structure:
+# [Magic: 2 chars "AV"] [Version: 2 hex "01"] [Type: 2 hex] [Nonce: 24 hex] [Tag: 32 hex] [Cipher_Hex: N*2 chars] \n
 function pack_frame(session_key, msg_type, plaintext_payload)
-    let p_len = len(plaintext_payload)
-    let out_frame_len = crypto::alloc_str(4)  # 4 bytes for int pointer
-    # Note: FFI returns ptr to static buffer, we need to copy it
-    let frame_ptr = alya_vpn_pack_frame_bin(session_key, msg_type, plaintext_payload, p_len, out_frame_len)
-    if frame_ptr == null
+    let frame = alya_vpn_pack_frame(session_key, msg_type, plaintext_payload, len(plaintext_payload))
+    if len(frame) == 0
         return null
-    end
-    # Read the frame length from the output parameter
-    # The ptr points to an int, we need to dereference it
-    let frame_len = 0
-    # Since we can't easily dereference in Alya, we rely on the fact that the binary
-    # format has a known header (32 bytes) + payload_len
-    frame_len = 32 + p_len
-
-    # Copy binary frame to a string (treating bytes as chars for transport)
-    let frame = ""
-    let i = 0
-    while i < frame_len
-        let b = char_at(frame_ptr, i)
-        frame = frame + b
-        i += 1
     end
     return frame
 end
 
-# Unpacks and authenticates an incoming binary frame
+# Unpacks and authenticates an incoming frame
 # Returns tuple: msg_type, plaintext (or 0, null on failure)
-function unpack_frame(session_key, frame_data)
-    let frame_len = len(frame_data)
-    if frame_len < 32
-        return 0, null
-    end
-
-    # Convert string to byte pointer for FFI
-    let plain = alya_vpn_unpack_frame_bin(session_key, frame_data, frame_len)
-    if plain == null
-        return 0, null
-    end
-    let msg_type = alya_vpn_unpack_frame_bin_type()
+function unpack_frame(session_key, frame_line)
+    let plain = alya_vpn_unpack_frame(session_key, frame_line, len(frame_line))
+    let msg_type = alya_vpn_unpack_frame_type()
     if msg_type == 0
         return 0, null
     end
     return msg_type, plain
 end
+

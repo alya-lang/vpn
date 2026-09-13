@@ -1,3 +1,12 @@
+#if !defined(_WIN32)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+#endif
+
 #include "proc_resolver.h"
 #include "buffer_pool.h"
 #include "crypto.h"
@@ -6,6 +15,19 @@
 #include <string.h>
 #include <stdint.h>
 #include <ctype.h>
+
+#if !defined(_WIN32)
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/time.h>
+#include <time.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#ifndef SOCKET
+#define SOCKET int
+#endif
+#endif
 
 #if defined(_MSC_VER)
 #define ALYA_THREAD_LOCAL __declspec(thread)
@@ -21,6 +43,7 @@ static void __attribute__((constructor)) init_unbuffered_io(void) {
     setvbuf(stderr, NULL, _IONBF, 0);
 }
 #endif
+
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -720,9 +743,13 @@ void alya_vpn_sleep_ms(int ms) {
 #if defined(_WIN32)
     Sleep((DWORD)ms);
 #else
-    usleep((useconds_t)ms * 1000);
+    struct timespec ts;
+    ts.tv_sec = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
 #endif
 }
+
 
 void alya_vpn_set_routing(int mode, const char *apps_csv) {
     s_split_mode = mode;

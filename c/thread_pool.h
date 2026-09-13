@@ -27,6 +27,16 @@ typedef enum {
     ALYA_WORK_SHUTDOWN = 255
 } AlyaWorkType;
 
+// Platform handle types
+#if defined(_WIN32)
+typedef void *AlyaThreadHandle;
+typedef void *AlyaEventHandle;
+#else
+#include <pthread.h>
+typedef pthread_t AlyaThreadHandle;
+typedef pthread_cond_t AlyaEventHandle;
+#endif
+
 // Forward declarations
 typedef struct AlyaCryptoWork AlyaCryptoWork;
 typedef struct AlyaIOWork AlyaIOWork;
@@ -93,7 +103,7 @@ typedef struct {
 struct AlyaWorkerThread {
     int id;                           // Worker ID
     int type;                         // 0 = crypto, 1 = I/O
-    void *thread_handle;              // Platform thread handle
+    AlyaThreadHandle thread_handle;   // Platform thread handle
     int running;                      // Running flag
     AlyaWorkQueue *queue;             // Work queue (for I/O workers with affinity)
     AlyaThreadPool *pool;             // Back-reference to pool
@@ -118,7 +128,7 @@ struct AlyaThreadPool {
     int channel_worker_map[ALYA_MAX_CHANNELS];
 
     // Synchronization
-    void *shutdown_event;             // Event/semaphore for shutdown
+    AlyaEventHandle shutdown_event;   // Event/semaphore for shutdown
     volatile int shutting_down;       // Shutdown flag
 
     // Statistics

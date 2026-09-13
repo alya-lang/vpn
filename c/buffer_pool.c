@@ -1,9 +1,19 @@
+#if !defined(_WIN32)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+#endif
+
 #include "buffer_pool.h"
 #include "crypto.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <errno.h>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -22,6 +32,9 @@ typedef CRITICAL_SECTION AlyaMutex;
 #include <unistd.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
+#ifndef SOCKET
+#define SOCKET int
+#endif
 typedef pthread_mutex_t AlyaMutex;
 #define MUTEX_INIT(m) pthread_mutex_init(m, NULL)
 #define MUTEX_LOCK(m) pthread_mutex_lock(m)
@@ -29,6 +42,7 @@ typedef pthread_mutex_t AlyaMutex;
 #define MUTEX_DESTROY(m) pthread_mutex_destroy(m)
 #define GET_THREAD_ID() (int)pthread_self()
 #endif
+
 
 // ============================================================================
 // Thread-Local Storage for Unpack
@@ -416,16 +430,8 @@ const uint8_t *alya_vpn_pack_frame_into_buffer(int buffer_id, const char *key_he
     if (!buf->in_use) return NULL;
 
     uint8_t key[32];
-    static char s_session_key_hex[65] = {0};
-    static uint8_t s_session_key_bin[32] = {0};
-    static int s_has_session_key = 0;
-
-    // Get key (same logic as crypto.c)
-    extern int alya_vpn_has_session_key(void);
-    extern const uint8_t *alya_vpn_get_session_key_bin(void);
-
-    if (s_has_session_key) {
-        memcpy(key, s_session_key_bin, 32);
+    if (alya_vpn_has_session_key()) {
+        memcpy(key, alya_vpn_get_session_key_bin(), 32);
     } else if (!key_hex || strlen(key_hex) < 64) {
         return NULL;
     } else {
@@ -494,12 +500,8 @@ const char *alya_vpn_unpack_frame_from_buffer(const char *key_hex, int buffer_id
     }
 
     uint8_t key[32];
-    static char s_session_key_hex[65] = {0};
-    static uint8_t s_session_key_bin[32] = {0};
-    static int s_has_session_key = 0;
-
-    if (s_has_session_key) {
-        memcpy(key, s_session_key_bin, 32);
+    if (alya_vpn_has_session_key()) {
+        memcpy(key, alya_vpn_get_session_key_bin(), 32);
     } else if (!key_hex || strlen(key_hex) < 64) {
         return NULL;
     } else {

@@ -1,3 +1,12 @@
+#if !defined(_WIN32)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE 1
+#endif
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE 1
+#endif
+#endif
+
 #include "thread_pool.h"
 #include "buffer_pool.h"
 #include "crypto.h"
@@ -6,6 +15,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdatomic.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
@@ -13,8 +23,6 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <process.h>
-typedef HANDLE AlyaThreadHandle;
-typedef HANDLE AlyaEventHandle;
 typedef CRITICAL_SECTION AlyaMutex;
 #define MUTEX_INIT(m) InitializeCriticalSection(m)
 #define MUTEX_LOCK(m) EnterCriticalSection(m)
@@ -27,8 +35,6 @@ typedef CRITICAL_SECTION AlyaMutex;
 #include <unistd.h>
 #include <sys/socket.h>
 #include <errno.h>
-typedef pthread_t AlyaThreadHandle;
-typedef pthread_cond_t AlyaEventHandle;
 typedef pthread_mutex_t AlyaMutex;
 #define MUTEX_INIT(m) pthread_mutex_init(m, NULL)
 #define MUTEX_LOCK(m) pthread_mutex_lock(m)
@@ -37,6 +43,7 @@ typedef pthread_mutex_t AlyaMutex;
 #define THREAD_RETURN_TYPE void *
 #define THREAD_RETURN_VAL NULL
 #endif
+
 
 // Use proper C11 atomic type for 64-bit counters
 typedef _Atomic uint64_t atomic_u64;
@@ -92,7 +99,7 @@ static void alya_event_signal(AlyaEventHandle *evt) {
 #endif
 }
 
-static void alya_event_wait(AlyaEventHandle *evt, AlyaMutex *mutex, int timeout_ms) {
+static void __attribute__((unused)) alya_event_wait(AlyaEventHandle *evt, AlyaMutex *mutex, int timeout_ms) {
 #if defined(_WIN32)
     MUTEX_UNLOCK(mutex);
     WaitForSingleObject(*evt, timeout_ms > 0 ? (DWORD)timeout_ms : INFINITE);
@@ -126,20 +133,27 @@ static AlyaThreadHandle alya_thread_create(THREAD_RETURN_TYPE (*func)(void *), v
 #if defined(_WIN32)
     return (AlyaThreadHandle)_beginthreadex(NULL, 0, func, arg, 0, NULL);
 #else
-    pthread_t tid;
-    pthread_create(&tid, NULL, func, arg);
+    pthread_t tid = 0;
+    if (pthread_create(&tid, NULL, func, arg) != 0) {
+        return 0;
+    }
     return tid;
 #endif
 }
 
 static void alya_thread_join(AlyaThreadHandle handle) {
 #if defined(_WIN32)
-    WaitForSingleObject(handle, INFINITE);
-    CloseHandle(handle);
+    if (handle) {
+        WaitForSingleObject(handle, INFINITE);
+        CloseHandle(handle);
+    }
 #else
-    pthread_join(handle, NULL);
+    if (handle != 0) {
+        pthread_join(handle, NULL);
+    }
 #endif
 }
+
 
 static int alya_get_cpu_count(void) {
 #if defined(_WIN32)
@@ -458,11 +472,7 @@ int alya_vpn_thread_pool_init(int crypto_workers, int io_workers) {
     }
 
     // Initialize shutdown event
-#if defined(_WIN32)
-    s_pool.shutdown_event = CreateEventA(NULL, TRUE, FALSE, NULL);
-#else
     alya_event_init(&s_pool.shutdown_event);
-#endif
 
     atomic_init((atomic_u64 *)&s_pool.crypto_submitted, 0);
     atomic_init((atomic_u64 *)&s_pool.crypto_completed, 0);
@@ -483,7 +493,11 @@ int alya_vpn_thread_pool_init(int crypto_workers, int io_workers) {
         s_pool.crypto_workers[i].queue = NULL; // Crypto workers share global queue
         s_pool.crypto_workers[i].pool = &s_pool;
         s_pool.crypto_workers[i].thread_handle = alya_thread_create(alya_crypto_worker, &s_pool.crypto_workers[i]);
+#if defined(_WIN32)
         if (!s_pool.crypto_workers[i].thread_handle) {
+#else
+        if (s_pool.crypto_workers[i].thread_handle == 0) {
+#endif
             fprintf(stderr, "[ThreadPool] Failed to create crypto worker %d\n", i);
             s_pool.crypto_worker_count = i;
             break;
@@ -499,7 +513,11 @@ int alya_vpn_thread_pool_init(int crypto_workers, int io_workers) {
         s_pool.io_workers[i].queue = &s_pool.io_queue;
         s_pool.io_workers[i].pool = &s_pool;
         s_pool.io_workers[i].thread_handle = alya_thread_create(alya_io_worker, &s_pool.io_workers[i]);
+#if defined(_WIN32)
         if (!s_pool.io_workers[i].thread_handle) {
+#else
+        if (s_pool.io_workers[i].thread_handle == 0) {
+#endif
             fprintf(stderr, "[ThreadPool] Failed to create I/O worker %d\n", i);
             s_pool.io_worker_count = i;
             break;
@@ -522,23 +540,31 @@ void alya_vpn_thread_pool_shutdown(void) {
 
     // Wait for crypto workers
     for (int i = 0; i < s_pool.crypto_worker_count; ++i) {
+#if defined(_WIN32)
         if (s_pool.crypto_workers[i].thread_handle) {
+#else
+        if (s_pool.crypto_workers[i].thread_handle != 0) {
+#endif
             alya_thread_join(s_pool.crypto_workers[i].thread_handle);
-            s_pool.crypto_workers[i].thread_handle = NULL;
+            s_pool.crypto_workers[i].thread_handle = 0;
         }
     }
 
     // Wait for I/O workers
     for (int i = 0; i < s_pool.io_worker_count; ++i) {
+#if defined(_WIN32)
         if (s_pool.io_workers[i].thread_handle) {
+#else
+        if (s_pool.io_workers[i].thread_handle != 0) {
+#endif
             alya_thread_join(s_pool.io_workers[i].thread_handle);
-            s_pool.io_workers[i].thread_handle = NULL;
+            s_pool.io_workers[i].thread_handle = 0;
         }
     }
 
     // Cleanup
     alya_event_destroy(&s_pool.shutdown_event);
-    s_pool.shutdown_event = NULL;
+
 
     // Free queue memory
     free(s_pool.crypto_queue.items);
@@ -629,9 +655,13 @@ void alya_vpn_thread_pool_drain(void) {
 #if defined(_WIN32)
         Sleep(1);
 #else
-        usleep(1000);
+        struct timespec ts;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 1000000L; // 1ms
+        nanosleep(&ts, NULL);
 #endif
     }
+
 }
 
 // ============================================================================
