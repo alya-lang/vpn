@@ -630,8 +630,8 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
                 int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
                 if (s == sizeof(si)) {
                     if (si.psi.soi_kind == SOCKINFO_TCP) {
-                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_is.insi_lport);
-                        int fport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_is.insi_fport);
+                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport);
+                        int fport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_fport);
                         if (lport == peer_remote_port && fport == proxy_local_port) {
                             char name_buf[256];
                             if (proc_name(pid, name_buf, sizeof(name_buf)) > 0) {
@@ -691,7 +691,7 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
                 int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
                 if (s == sizeof(si)) {
                     if (si.psi.soi_kind == SOCKINFO_TCP) {
-                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpi_is.insi_lport);
+                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport);
                         if (lport == local_port) {
                             char name_buf[256];
                             if (proc_name(pid, name_buf, sizeof(name_buf)) > 0) {
