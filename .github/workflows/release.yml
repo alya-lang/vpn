@@ -34,7 +34,7 @@ jobs:
             os-name: macos-arm64
             binary: alya-vpn
             archive: alya-vpn-macos-arm64.tar.gz
-          - runner: macos-13
+          - runner: macos-latest
             os-name: macos-x64
             binary: alya-vpn
             archive: alya-vpn-macos-x64.tar.gz
@@ -43,16 +43,48 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set up Alya Compiler
+      - name: Set up Alya Compiler (Standard)
+        if: matrix.target.os-name != 'macos-x64'
         uses: alya-lang/setup-alya@v1
         with:
           version: 'latest'
 
-      - name: Verify alyac installation
+      - name: Set up Alya Compiler (macOS x86_64 via Rosetta)
+        if: matrix.target.os-name == 'macos-x64'
+        run: |
+          curl -sSL -o alyac-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.14/alyac-v0.0.14-x86_64-macos.tar.gz
+          tar -xzf alyac-x64.tar.gz
+          sudo cp alyac-v0.0.14-x86_64-macos/alyac /usr/local/bin/alyac
+          sudo chmod +x /usr/local/bin/alyac
+          rm -rf alyac-x64.tar.gz alyac-v0.0.14-x86_64-macos
+
+      - name: Verify alyac installation (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          if [ "${{ matrix.target.os-name }}" = "macos-x64" ]; then
+            arch -x86_64 alyac --version
+          else
+            alyac --version
+          fi
+
+      - name: Verify alyac installation (Windows)
+        if: runner.os == 'Windows'
         run: |
           alyac --version
 
-      - name: Build binary
+      - name: Build binary (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          if [ "${{ matrix.target.os-name }}" = "macos-x64" ]; then
+            arch -x86_64 alyac build -o ${{ matrix.target.binary }}
+            file ${{ matrix.target.binary }}
+          else
+            alyac build -o ${{ matrix.target.binary }}
+            file ${{ matrix.target.binary }}
+          fi
+
+      - name: Build binary (Windows)
+        if: runner.os == 'Windows'
         run: |
           alyac build -o ${{ matrix.target.binary }}
 
