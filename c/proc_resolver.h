@@ -85,6 +85,7 @@ int  alya_vpn_direct_count(void);
 int  alya_vpn_direct_app_at(int index);
 int  alya_vpn_direct_dest_at(int index);
 void alya_vpn_direct_clear(void);
+int  alya_vpn_open_direct(int app_sock, const char *host, int port);
 
 // High-speed native direct pump: forwards raw binary bytes bidirectionally
 // between all active (app_sock <-> dest_sock) direct connections with zero

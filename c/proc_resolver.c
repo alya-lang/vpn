@@ -642,16 +642,21 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
         int buf_size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
         if (buf_size <= 0) continue;
 
-        struct proc_fdinfo *fds = (struct proc_fdinfo *)malloc((size_t)buf_size);
-        if (!fds) continue;
+        struct proc_fdinfo stack_fds[128];
+        struct proc_fdinfo *fds = stack_fds;
+        int count = buf_size / (int)sizeof(struct proc_fdinfo);
+        if (count > 128) {
+            fds = (struct proc_fdinfo *)malloc((size_t)buf_size);
+            if (!fds) continue;
+        }
 
         int num_fds = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, buf_size);
         if (num_fds <= 0) {
-            free(fds);
+            if (fds != stack_fds) free(fds);
             continue;
         }
 
-        int count = num_fds / (int)sizeof(struct proc_fdinfo);
+        count = num_fds / (int)sizeof(struct proc_fdinfo);
         for (int j = 0; j < count; ++j) {
             if (fds[j].proc_fdtype == PROX_FDTYPE_SOCKET) {
                 struct socket_fdinfo si;
@@ -661,16 +666,17 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
                         int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport);
                         int fport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_fport);
                         if (lport == peer_remote_port && fport == proxy_local_port) {
-                            if (macos_get_proc_name_or_bundle(pid, out_name, max_len)) {
-                                found = 1;
-                                break;
+                            if (!macos_get_proc_name_or_bundle(pid, out_name, max_len)) {
+                                snprintf(out_name, (size_t)max_len, "pid-%d", (int)pid);
                             }
+                            found = 1;
+                            break;
                         }
                     }
                 }
             }
         }
-        free(fds);
+        if (fds != stack_fds) free(fds);
     }
     free(pids);
     return found;
@@ -1260,12 +1266,16 @@ static int connect_target(const char *host, int port) {
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_UNSPEC;
+    hints.ai_family = AF_INET; // Prefer IPv4 to avoid 75-second IPv6 blackhole hangs
     hints.ai_socktype = SOCK_STREAM;
 
     struct addrinfo *res = NULL;
     if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
-        return -1;
+        // Fall back to AF_UNSPEC if IPv4 lookup returned nothing
+        hints.ai_family = AF_UNSPEC;
+        if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+            return -1;
+        }
     }
 
     int target_sock = -1;
@@ -1275,6 +1285,17 @@ static int connect_target(const char *host, int port) {
 #if defined(SO_NOSIGPIPE)
         int opt = 1;
         setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+#endif
+#if defined(_WIN32)
+        DWORD tv = 3000;
+        setsockopt((SOCKET)s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+        setsockopt((SOCKET)s, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
+#else
+        struct timeval tv;
+        tv.tv_sec = 3;
+        tv.tv_usec = 0;
+        setsockopt((SOCKET)s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+        setsockopt((SOCKET)s, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
 #endif
 
         if (connect((SOCKET)s, p->ai_addr, (int)p->ai_addrlen) == 0) {
@@ -1390,7 +1411,7 @@ void alya_vpn_direct_set(int app_sock, int dest_sock) {
 
 int alya_vpn_pump_direct(void) {
     int activity = 0;
-    char buf[32768];
+    static char buf[65536];
 
     for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
         if (!s_client_directs[i].in_use) continue;
@@ -1398,24 +1419,11 @@ int alya_vpn_pump_direct(void) {
         int d_sock = s_client_directs[i].dest_sock;
         if (a_sock < 0 || d_sock < 0) continue;
 
-        // 1. App -> Destination
+        // 1. App -> Destination (uploading request / data / photos)
         int n1 = recv((SOCKET)a_sock, buf, sizeof(buf), 0);
         if (n1 > 0) {
             activity = 1;
-            int sent = 0;
-            int send_err = 0;
-            while (sent < n1) {
-                int s = send((SOCKET)d_sock, buf + sent, n1 - sent, 0);
-                if (s > 0) {
-                    sent += s;
-                } else {
-                    if (s < 0 && !is_would_block()) {
-                        send_err = 1;
-                    }
-                    break;
-                }
-            }
-            if (send_err) {
+            if (send_all(d_sock, (const uint8_t *)buf, n1) < 0) {
                 close_sock(a_sock);
                 close_sock(d_sock);
                 s_client_directs[i].in_use = 0;
@@ -1442,24 +1450,11 @@ int alya_vpn_pump_direct(void) {
             }
         }
 
-        // 2. Destination -> App
+        // 2. Destination -> App (downloading response / media)
         int n2 = recv((SOCKET)d_sock, buf, sizeof(buf), 0);
         if (n2 > 0) {
             activity = 1;
-            int sent = 0;
-            int send_err = 0;
-            while (sent < n2) {
-                int s = send((SOCKET)a_sock, buf + sent, n2 - sent, 0);
-                if (s > 0) {
-                    sent += s;
-                } else {
-                    if (s < 0 && !is_would_block()) {
-                        send_err = 1;
-                    }
-                    break;
-                }
-            }
-            if (send_err) {
+            if (send_all(a_sock, (const uint8_t *)buf, n2) < 0) {
                 close_sock(a_sock);
                 close_sock(d_sock);
                 s_client_directs[i].in_use = 0;
@@ -1486,6 +1481,18 @@ int alya_vpn_pump_direct(void) {
     }
 
     return activity;
+}
+
+int alya_vpn_open_direct(int app_sock, const char *host, int port) {
+    if (app_sock < 0 || !host || !host[0] || port <= 0) return -1;
+    int dest_sock = connect_target(host, port);
+    if (dest_sock < 0) {
+        return -1;
+    }
+    set_sock_nonblocking(app_sock);
+    set_sock_nonblocking(dest_sock);
+    alya_vpn_direct_set(app_sock, dest_sock);
+    return dest_sock;
 }
 
 

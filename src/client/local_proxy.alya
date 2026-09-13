@@ -142,10 +142,8 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
                         end
                     else
                         say("[DIRECT] [" + proc_name + "] -> " + host + ":" + port + " (Bypassing VPN)")
-                        let dest_sock = net::tcp_connect(host, port)
-                        if dest_sock >= 0
-                            alya_vpn_direct_set(app_sock, dest_sock)
-                        else
+                        let res = alya_vpn_open_direct(app_sock, host, port)
+                        if res < 0
                             net::tcp_close(app_sock)
                         end
                     end
