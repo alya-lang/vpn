@@ -584,6 +584,8 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
 
 int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len) {
     return alya_vpn_get_process_by_port(local_port, out_name, max_len);
+}
+
 #elif defined(__APPLE__)
 #include <libproc.h>
 #include <sys/proc_info.h>
