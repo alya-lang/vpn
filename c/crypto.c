@@ -381,12 +381,10 @@ int alya_vpn_encrypt(
 
     uint8_t key[32];
     uint8_t nonce[12];
-    if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
-        if (s_has_session_key) {
-            memcpy(key, s_session_key_bin, 32);
-        } else {
-            return -2;
-        }
+    if (s_has_session_key) {
+        memcpy(key, s_session_key_bin, 32);
+    } else if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        return -2;
     }
 
     if (!nonce_hex || hex_to_bytes(nonce_hex, 24, nonce, 12) != 0) {
@@ -431,12 +429,10 @@ int alya_vpn_decrypt(
     uint8_t nonce[12];
     uint8_t expected_tag[16];
 
-    if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
-        if (s_has_session_key) {
-            memcpy(key, s_session_key_bin, 32);
-        } else {
-            return -2;
-        }
+    if (s_has_session_key) {
+        memcpy(key, s_session_key_bin, 32);
+    } else if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        return -2;
     }
 
     if (!nonce_hex || hex_to_bytes(nonce_hex, 24, nonce, 12) != 0 ||
@@ -494,12 +490,12 @@ const char *alya_vpn_pack_frame(const char *key_hex, int msg_type, const char *p
     }
 
     uint8_t key[32];
-    if (!key_hex || strlen(key_hex) < 64 || hex_to_bytes(key_hex, 64, key, 32) != 0) {
-        if (s_has_session_key) {
-            memcpy(key, s_session_key_bin, 32);
-        } else {
-            return "";
-        }
+    // Always prefer the cached C-side session key (immune to Alya string corruption).
+    // Fall back to key_hex only if no key has been cached yet (early startup path).
+    if (s_has_session_key) {
+        memcpy(key, s_session_key_bin, 32);
+    } else if (!key_hex || strlen(key_hex) < 64 || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        return "";
     }
 
     // Generate random 12-byte nonce
@@ -556,12 +552,12 @@ const char *alya_vpn_unpack_frame(const char *key_hex, const char *frame_line, i
     }
 
     uint8_t key[32];
-    if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
-        if (s_has_session_key) {
-            memcpy(key, s_session_key_bin, 32);
-        } else {
-            return "";
-        }
+    // Always prefer the cached C-side session key (immune to Alya string corruption).
+    // Fall back to key_hex only if no key has been cached yet (early startup path).
+    if (s_has_session_key) {
+        memcpy(key, s_session_key_bin, 32);
+    } else if (!key_hex || hex_to_bytes(key_hex, 64, key, 32) != 0) {
+        return "";
     }
 
     // Message type
