@@ -55,6 +55,7 @@ static void __attribute__((constructor)) init_unbuffered_io(void) {
 #include <winsock2.h>
 #include <windows.h>
 #include <ws2tcpip.h>
+#include <tlhelp32.h>
 
 // Dynamic typedefs for IpHlpApi functions to avoid hard compile-time library linkage
 typedef DWORD (WINAPI *pfnGetExtendedTcpTable)(
@@ -144,20 +145,40 @@ static int get_process_name_by_pid(DWORD pid, char *out_name, int max_len) {
     if (!hProc) {
         hProc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid);
     }
-    if (!hProc) return 0;
-
-    char path[MAX_PATH] = {0};
-    DWORD size = MAX_PATH;
-    typedef BOOL (WINAPI *pfnQueryFullProcessImageNameA)(HANDLE, DWORD, LPSTR, PDWORD);
-    HMODULE hKernel = GetModuleHandleA("kernel32.dll");
-    pfnQueryFullProcessImageNameA pQuery = hKernel ? (pfnQueryFullProcessImageNameA)GetProcAddress(hKernel, "QueryFullProcessImageNameA") : NULL;
-
     int success = 0;
-    if (pQuery && pQuery(hProc, 0, path, &size)) {
-        extract_basename(path, out_name, max_len);
-        success = 1;
+    if (hProc) {
+        char path[MAX_PATH] = {0};
+        DWORD size = MAX_PATH;
+        typedef BOOL (WINAPI *pfnQueryFullProcessImageNameA)(HANDLE, DWORD, LPSTR, PDWORD);
+        HMODULE hKernel = GetModuleHandleA("kernel32.dll");
+        pfnQueryFullProcessImageNameA pQuery = hKernel ? (pfnQueryFullProcessImageNameA)GetProcAddress(hKernel, "QueryFullProcessImageNameA") : NULL;
+
+        if (pQuery && pQuery(hProc, 0, path, &size)) {
+            extract_basename(path, out_name, max_len);
+            success = 1;
+        }
+        CloseHandle(hProc);
     }
-    CloseHandle(hProc);
+
+    // Fallback: Toolhelp32 snapshot works even without PROCESS_QUERY rights
+    if (!success) {
+        HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (hSnap != INVALID_HANDLE_VALUE) {
+            PROCESSENTRY32 pe;
+            pe.dwSize = sizeof(pe);
+            if (Process32First(hSnap, &pe)) {
+                do {
+                    if (pe.th32ProcessID == pid) {
+                        extract_basename(pe.szExeFile, out_name, max_len);
+                        success = 1;
+                        break;
+                    }
+                } while (Process32Next(hSnap, &pe));
+            }
+            CloseHandle(hSnap);
+        }
+    }
+
     return success;
 }
 
@@ -605,56 +626,118 @@ int alya_vpn_socks5_handshake(int client_sock, char *out_host, int max_host_len)
     setsockopt((SOCKET)client_sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
 #endif
 
-    // 1. SOCKS5 Greeting: [0x05, NMETHODS, METHODS...]
-    unsigned char greet[256];
-    int n = recv((SOCKET)client_sock, (char *)greet, sizeof(greet), 0);
-    if (n < 2 || greet[0] != 0x05) {
+    // 1. Initial Greeting / Request peek
+    unsigned char greet[1024];
+    int n = recv((SOCKET)client_sock, (char *)greet, sizeof(greet) - 1, 0);
+    if (n < 2) {
         return -1;
     }
+    greet[n] = '\0';
 
-    // Respond: [0x05, 0x00] (No auth required)
-    const unsigned char greet_resp[2] = {0x05, 0x00};
-    if (send((SOCKET)client_sock, (const char *)greet_resp, 2, 0) != 2) {
-        return -1;
+    // Protocol A: SOCKS5 [0x05, NMETHODS, METHODS...]
+    if (greet[0] == 0x05) {
+        const unsigned char greet_resp[2] = {0x05, 0x00};
+        if (send((SOCKET)client_sock, (const char *)greet_resp, 2, 0) != 2) {
+            return -1;
+        }
+
+        unsigned char req[512];
+        n = recv((SOCKET)client_sock, (char *)req, sizeof(req), 0);
+        if (n < 7 || req[0] != 0x05 || req[1] != 0x01) {
+            const unsigned char fail_resp[10] = {0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+            send((SOCKET)client_sock, (const char *)fail_resp, 10, 0);
+            return -1;
+        }
+
+        int atyp = req[3];
+        int target_port = 0;
+
+        if (atyp == 1) { // IPv4 (4 bytes)
+            if (n < 10) return -1;
+            snprintf(out_host, (size_t)max_host_len, "%u.%u.%u.%u", req[4], req[5], req[6], req[7]);
+            target_port = (req[8] << 8) | req[9];
+        } else if (atyp == 3) { // Domain name (1 byte length + string)
+            int domain_len = req[4];
+            if (n < 5 + domain_len + 2 || domain_len >= max_host_len) return -1;
+            memcpy(out_host, &req[5], (size_t)domain_len);
+            out_host[domain_len] = '\0';
+            target_port = (req[5 + domain_len] << 8) | req[5 + domain_len + 1];
+        } else if (atyp == 4) { // IPv6 (16 bytes)
+            if (n < 22) return -1;
+            inet_ntop(AF_INET6, &req[4], out_host, (socklen_t)max_host_len);
+            target_port = (req[20] << 8) | req[21];
+        } else {
+            const unsigned char fail_resp[10] = {0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
+            send((SOCKET)client_sock, (const char *)fail_resp, 10, 0);
+            return -1;
+        }
+
+        // Respond success: [0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x10, 0x00]
+        const unsigned char ok_resp[10] = {0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x10, 0x00};
+        send((SOCKET)client_sock, (const char *)ok_resp, 10, 0);
+        return target_port;
     }
 
-    // 2. SOCKS5 Request: [0x05, CMD(1), RSV(0), ATYP(1), DST.ADDR, DST.PORT(2)]
-    unsigned char req[512];
-    n = recv((SOCKET)client_sock, (char *)req, sizeof(req), 0);
-    if (n < 7 || req[0] != 0x05 || req[1] != 0x01) {
-        const unsigned char fail_resp[10] = {0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
-        send((SOCKET)client_sock, (const char *)fail_resp, 10, 0);
-        return -1;
+    // Protocol B: HTTP CONNECT (Used by Chrome, Edge, Discord, and system proxy for HTTPS)
+    // E.g.: "CONNECT discord.com:443 HTTP/1.1\r\nHost: discord.com:443\r\n\r\n"
+    if (strncmp((const char *)greet, "CONNECT ", 8) == 0) {
+        char *p = (char *)greet + 8;
+        char *space = strchr(p, ' ');
+        if (!space) return -1;
+        *space = '\0';
+
+        char *colon = strrchr(p, ':');
+        int target_port = 443;
+        if (colon) {
+            *colon = '\0';
+            target_port = atoi(colon + 1);
+        }
+        snprintf(out_host, (size_t)max_host_len, "%s", p);
+
+        // Read remaining headers until \r\n\r\n if needed
+        if (strstr(space + 1, "\r\n\r\n") == NULL) {
+            char extra[512];
+            while (1) {
+                int en = recv((SOCKET)client_sock, extra, sizeof(extra) - 1, 0);
+                if (en <= 0) break;
+                extra[en] = '\0';
+                if (strstr(extra, "\r\n\r\n") != NULL) break;
+            }
+        }
+
+        // Respond: HTTP/1.1 200 Connection Established
+        const char *resp = "HTTP/1.1 200 Connection Established\r\n\r\n";
+        send((SOCKET)client_sock, resp, (int)strlen(resp), 0);
+        return target_port;
     }
 
-    int atyp = req[3];
-    int target_port = 0;
-
-    if (atyp == 1) { // IPv4 (4 bytes)
-        if (n < 10) return -1;
-        snprintf(out_host, (size_t)max_host_len, "%u.%u.%u.%u", req[4], req[5], req[6], req[7]);
-        target_port = (req[8] << 8) | req[9];
-    } else if (atyp == 3) { // Domain name (1 byte length + string)
-        int domain_len = req[4];
-        if (n < 5 + domain_len + 2 || domain_len >= max_host_len) return -1;
-        memcpy(out_host, &req[5], (size_t)domain_len);
-        out_host[domain_len] = '\0';
-        target_port = (req[5 + domain_len] << 8) | req[5 + domain_len + 1];
-    } else if (atyp == 4) { // IPv6 (16 bytes)
-        if (n < 22) return -1;
-        inet_ntop(AF_INET6, &req[4], out_host, (socklen_t)max_host_len);
-        target_port = (req[20] << 8) | req[21];
-    } else {
-        const unsigned char fail_resp[10] = {0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
-        send((SOCKET)client_sock, (const char *)fail_resp, 10, 0);
-        return -1;
+    // Protocol C: SOCKS4 / SOCKS4a [0x04, CMD(0x01), PORT(2), IP(4), USERID..., NULL, (DOMAIN..., NULL)]
+    if (greet[0] == 0x04) {
+        if (n < 8 || greet[1] != 0x01) {
+            const unsigned char fail_resp[8] = {0x00, 0x5b, 0, 0, 0, 0, 0, 0};
+            send((SOCKET)client_sock, (const char *)fail_resp, 8, 0);
+            return -1;
+        }
+        int target_port = (greet[2] << 8) | greet[3];
+        // SOCKS4a: IP 0.0.0.x with x != 0 -> domain name follows user ID
+        if (greet[4] == 0 && greet[5] == 0 && greet[6] == 0 && greet[7] != 0) {
+            int idx = 8;
+            while (idx < n && greet[idx] != '\0') idx++;
+            idx++; // skip null terminator of user ID
+            if (idx < n) {
+                snprintf(out_host, (size_t)max_host_len, "%s", (const char *)&greet[idx]);
+            } else {
+                return -1;
+            }
+        } else {
+            snprintf(out_host, (size_t)max_host_len, "%u.%u.%u.%u", greet[4], greet[5], greet[6], greet[7]);
+        }
+        const unsigned char ok_resp[8] = {0x00, 0x5a, 0, 0, 0, 0, 0, 0};
+        send((SOCKET)client_sock, (const char *)ok_resp, 8, 0);
+        return target_port;
     }
 
-    // Respond success: [0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x10, 0x00]
-    const unsigned char ok_resp[10] = {0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x10, 0x00};
-    send((SOCKET)client_sock, (const char *)ok_resp, 10, 0);
-
-    return target_port;
+    return -1;
 }
 
 static char s_recv_hex_buf[65536];
@@ -1692,3 +1775,72 @@ int alya_vpn_pump_server_vpn(int client_sock) {
 
     return activity;
 }
+
+// ============================================================================
+// Windows System-Wide Proxy Management
+// ============================================================================
+
+#if defined(_WIN32)
+static int s_system_proxy_active = 0;
+
+void alya_vpn_set_system_proxy(int enable, int port) {
+    HKEY hKey;
+    if (RegOpenKeyExA(HKEY_CURRENT_USER,
+                      "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
+                      0, KEY_SET_VALUE | KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS) {
+        if (enable) {
+            DWORD val_enable = 1;
+            char proxy_str[128];
+            // Configure HTTP, HTTPS, and SOCKS to point to local proxy port
+            snprintf(proxy_str, sizeof(proxy_str), "http=127.0.0.1:%d;https=127.0.0.1:%d;socks=127.0.0.1:%d", port, port, port);
+
+            RegSetValueExA(hKey, "ProxyEnable", 0, REG_DWORD, (const BYTE *)&val_enable, sizeof(val_enable));
+            RegSetValueExA(hKey, "ProxyServer", 0, REG_SZ, (const BYTE *)proxy_str, (DWORD)(strlen(proxy_str) + 1));
+            RegSetValueExA(hKey, "ProxyOverride", 0, REG_SZ, (const BYTE *)"<local>", 8);
+            s_system_proxy_active = 1;
+        } else {
+            DWORD val_disable = 0;
+            RegSetValueExA(hKey, "ProxyEnable", 0, REG_DWORD, (const BYTE *)&val_disable, sizeof(val_disable));
+            s_system_proxy_active = 0;
+        }
+        RegCloseKey(hKey);
+
+        // Notify WinINet and running applications of settings change
+        HMODULE hWinINet = LoadLibraryA("wininet.dll");
+        if (hWinINet) {
+            typedef BOOL (WINAPI *pfnInternetSetOptionA)(HANDLE, DWORD, LPVOID, DWORD);
+            pfnInternetSetOptionA pSetOpt = (pfnInternetSetOptionA)GetProcAddress(hWinINet, "InternetSetOptionA");
+            if (pSetOpt) {
+                pSetOpt(NULL, 39 /* INTERNET_OPTION_SETTINGS_CHANGED */, NULL, 0);
+                pSetOpt(NULL, 37 /* INTERNET_OPTION_REFRESH */, NULL, 0);
+            }
+            FreeLibrary(hWinINet);
+        }
+    }
+}
+
+static void vpn_cleanup_on_exit(void) {
+    if (s_system_proxy_active) {
+        alya_vpn_set_system_proxy(0, 0);
+    }
+}
+
+static BOOL WINAPI vpn_console_ctrl_handler(DWORD ctrl_type) {
+    if (ctrl_type == CTRL_C_EVENT || ctrl_type == CTRL_BREAK_EVENT || ctrl_type == CTRL_CLOSE_EVENT) {
+        if (s_system_proxy_active) {
+            alya_vpn_set_system_proxy(0, 0);
+        }
+    }
+    return FALSE;
+}
+
+void alya_vpn_init_system_proxy_hook(void) {
+    atexit(vpn_cleanup_on_exit);
+    SetConsoleCtrlHandler(vpn_console_ctrl_handler, TRUE);
+}
+#else
+void alya_vpn_set_system_proxy(int enable, int port) {
+    (void)enable; (void)port;
+}
+void alya_vpn_init_system_proxy_hook(void) {}
+#endif

@@ -32,7 +32,8 @@ function print_usage()
     say("                                inc: ONLY listed apps use VPN")
     say("                                exc: Listed apps BYPASS VPN (default)")
     say("    --apps <a,b,c>            Comma-separated app names or patterns")
-    say("                              e.g. 'discord,steamwebhelper.exe,*torrent*'\n")
+    say("                              e.g. 'discord,steamwebhelper.exe,*torrent*'")
+    say("    --no-system-proxy         Do not configure Windows system proxy automatically\n")
     say("  check-port <port>           Diagnostic: inspect process owning local port")
     say("  benchmark                   Run ChaCha20-Poly1305 encryption benchmark\n")
 end
@@ -65,6 +66,7 @@ function load_client_config(config_path)
         "local_port": 1080,
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "mode": "exclude",
+        "system_proxy": "true",
         "apps": []
     }
     let in_apps = 0
@@ -89,6 +91,8 @@ function load_client_config(config_path)
                 cfg["passphrase"] = strip_val(val)
             else if key == "mode"
                 cfg["mode"] = strip_val(val)
+            else if key == "system_proxy" or key == "auto_system_proxy"
+                cfg["system_proxy"] = strip_val(val)
             else if key == "apps"
                 in_apps = 1
                 if proto::find_char(val, "]") >= 0
@@ -201,6 +205,7 @@ function main()
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let split_mode = router::mode_exclude() # Default blacklist
         let app_list = ["discord", "Discord.exe"]
+        let auto_sys_proxy = 1
 
         # 1. Automatically load config/client.toml if present
         let cfg_file = "config/client.toml"
@@ -217,6 +222,9 @@ function main()
                 split_mode = router::mode_include()
             else if m == "exc" or m == "exclude"
                 split_mode = router::mode_exclude()
+            end
+            if file_cfg["system_proxy"] == "false" or file_cfg["system_proxy"] == "0"
+                auto_sys_proxy = 0
             end
             if len(file_cfg["apps"]) > 0
                 app_list = file_cfg["apps"]
@@ -250,13 +258,16 @@ function main()
             else if args_list[i] == "--apps" and i + 1 < len(args_list)
                 app_list = proto::split_string(args_list[i + 1], ",")
                 i += 2
+            else if args_list[i] == "--no-system-proxy" or args_list[i] == "--no-proxy"
+                auto_sys_proxy = 0
+                i += 1
             else
                 i += 1
             end
         end
 
         print_banner()
-        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list)
+        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list, auto_sys_proxy)
         return 0
     end
 

@@ -22,7 +22,7 @@ function parse_socks5_request(client_sock)
 end
 
 # Starts the local SOCKS5 proxy and routes traffic according to split-tunneling configuration
-function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps)
+function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps, auto_sys_proxy)
     # 1. Initialize thread pool
     let tp_init = tpool::thread_pool_init(4, 8)  # 4 crypto workers, 8 I/O workers
     if tp_init != 0
@@ -82,6 +82,12 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
         return 1
     end
     say("[INFO] Encrypted VPN tunnel established successfully!")
+
+    if auto_sys_proxy == 1
+        alya_vpn_init_system_proxy_hook()
+        alya_vpn_set_system_proxy(1, local_port)
+        say("[INFO] Windows System Proxy automatically configured (127.0.0.1:" + local_port + ")")
+    end
 
     # Assign VPN socket to I/O worker 0 for dedicated handling
     tpool::thread_pool_assign_channel_worker(-1, 0)  # Special channel ID for VPN socket
@@ -162,5 +168,10 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
     net::tcp_close(vpn_sock)
     net::tcp_close(proxy_sock)
     tpool::thread_pool_shutdown()
+
+    if auto_sys_proxy == 1
+        alya_vpn_set_system_proxy(0, 0)
+        say("[INFO] Windows System Proxy restored.")
+    end
     return 0
 end

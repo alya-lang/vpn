@@ -119,6 +119,13 @@ int alya_vpn_pump_client_vpn(int vpn_sock);
 // Returns 1 if activity, 0 if idle, -1 if client_sock closed/error.
 int alya_vpn_pump_server_vpn(int client_sock);
 
+// Automatically configures or restores the OS system proxy (127.0.0.1:port)
+void alya_vpn_set_system_proxy(int enable, int port);
+
+// Hooks OS console events (Ctrl+C, close) to cleanly disable system proxy on exit
+void alya_vpn_init_system_proxy_hook(void);
+
+
 
 // ============================================================================
 // Buffer Pool & Zero-Copy I/O (New - eliminates hex encoding/decoding)
