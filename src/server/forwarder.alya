@@ -3,6 +3,7 @@
 
 import "std/net" as net
 import "std/os" as os
+import "std/thread" as thread
 import "../common/crypto.alya" as crypto
 import "../common/protocol.alya" as proto
 import "../ffi.alya"
@@ -31,13 +32,25 @@ function vpn_run_server(listen_port, passphrase)
                 let client_ip = net::tcp_peer_ip(client_sock)
                 let client_port = net::tcp_peer_port(client_sock)
                 say("[INFO] Client connected from " + client_ip + ":" + client_port)
-                vpn_handle_client(client_sock, key)
-                say("[INFO] Client disconnected: " + client_ip + ":" + client_port)
+                # Spawn an OS thread per client — each thread gets its own Alya heap,
+                # so string state (buffers, session_key, etc.) is fully isolated.
+                thread::thread_spawn(vpn_client_thread, client_sock)
             end
         end
     end
 
     net::tcp_close(server_sock)
+    return 0
+end
+
+# Thread entry point: called by thread_spawn(vpn_client_thread, client_sock).
+# Each call runs in its own OS thread with an isolated Alya heap.
+# session_key is passed as "" — C always uses the cached key from
+# alya_vpn_set_session_passphrase (immune to Alya bump allocator corruption).
+function vpn_client_thread(client_sock)
+    let client_ip = net::tcp_peer_ip(client_sock)
+    vpn_handle_client(client_sock, "")
+    say("[INFO] Client disconnected: " + client_ip)
     return 0
 end
 
