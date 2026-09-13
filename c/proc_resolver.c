@@ -5,6 +5,14 @@
 #include <stdint.h>
 #include <ctype.h>
 
+#if defined(_MSC_VER)
+#define ALYA_THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define ALYA_THREAD_LOCAL _Thread_local
+#else
+#define ALYA_THREAD_LOCAL __thread
+#endif
+
 #if defined(__GNUC__) || defined(__clang__)
 static void __attribute__((constructor)) init_unbuffered_io(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
@@ -620,7 +628,7 @@ typedef struct {
 
 static AlyaChannelEntry s_client_channels[ALYA_MAX_CHANNELS];
 static AlyaDirectEntry s_client_directs[ALYA_MAX_CHANNELS];
-static AlyaSrvChannelEntry s_server_channels[ALYA_MAX_CHANNELS];
+static ALYA_THREAD_LOCAL AlyaSrvChannelEntry s_server_channels[ALYA_MAX_CHANNELS];
 
 // Client Channel Table
 void alya_vpn_ch_set(int channel_id, int app_sock) {

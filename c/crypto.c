@@ -12,6 +12,14 @@
 #include <unistd.h>
 #endif
 
+#if defined(_MSC_VER)
+#define ALYA_THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define ALYA_THREAD_LOCAL _Thread_local
+#else
+#define ALYA_THREAD_LOCAL __thread
+#endif
+
 // ============================================================================
 // Internal Helpers: Hex Encoding & Decoding
 // ============================================================================
@@ -476,9 +484,9 @@ int alya_vpn_decrypt(
     return 0;
 }
 
-static char s_frame_buf[131072];
-static char s_plain_buf[65536];
-static int s_last_unpack_type = 0;
+static ALYA_THREAD_LOCAL char s_frame_buf[131072];
+static ALYA_THREAD_LOCAL char s_plain_buf[65536];
+static ALYA_THREAD_LOCAL int s_last_unpack_type = 0;
 
 int alya_vpn_unpack_frame_type(void) {
     return s_last_unpack_type;
@@ -612,7 +620,7 @@ const char *alya_vpn_unpack_frame(const char *key_hex, const char *frame_line, i
     return s_plain_buf;
 }
 
-static char s_data_payload_buf[65536];
+static ALYA_THREAD_LOCAL char s_data_payload_buf[65536];
 
 const char *alya_vpn_pack_data_payload(int channel_id, const char *hex_data) {
     if (!hex_data) hex_data = "";
