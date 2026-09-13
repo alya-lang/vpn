@@ -593,6 +593,31 @@ int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len
 #include <libproc.h>
 #include <sys/proc_info.h>
 
+static int macos_get_proc_name_or_bundle(pid_t pid, char *out_name, int max_len) {
+    if (!out_name || max_len <= 0) return 0;
+    char path_buf[1024];
+    if (proc_pidpath((int)pid, path_buf, sizeof(path_buf)) > 0) {
+        char *app_ext = strstr(path_buf, ".app");
+        if (app_ext) {
+            char *slash = app_ext;
+            while (slash > path_buf && *(slash - 1) != '/') slash--;
+            size_t bname_len = (size_t)(app_ext - slash);
+            if (bname_len > 0 && bname_len < (size_t)max_len) {
+                memcpy(out_name, slash, bname_len);
+                out_name[bname_len] = '\0';
+                return 1;
+            }
+        }
+    }
+    char name_buf[256];
+    if (proc_name((int)pid, name_buf, sizeof(name_buf)) > 0) {
+        strncpy(out_name, name_buf, (size_t)max_len - 1);
+        out_name[max_len - 1] = '\0';
+        return 1;
+    }
+    return 0;
+}
+
 int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port, char *out_name, int max_len) {
     if (!out_name || max_len <= 0) return 0;
     out_name[0] = '\0';
@@ -636,10 +661,7 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
                         int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport);
                         int fport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_fport);
                         if (lport == peer_remote_port && fport == proxy_local_port) {
-                            char name_buf[256];
-                            if (proc_name(pid, name_buf, sizeof(name_buf)) > 0) {
-                                strncpy(out_name, name_buf, (size_t)max_len - 1);
-                                out_name[max_len - 1] = '\0';
+                            if (macos_get_proc_name_or_bundle(pid, out_name, max_len)) {
                                 found = 1;
                                 break;
                             }
@@ -696,10 +718,7 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
                     if (si.psi.soi_kind == SOCKINFO_TCP) {
                         int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport);
                         if (lport == local_port) {
-                            char name_buf[256];
-                            if (proc_name(pid, name_buf, sizeof(name_buf)) > 0) {
-                                strncpy(out_name, name_buf, (size_t)max_len - 1);
-                                out_name[max_len - 1] = '\0';
+                            if (macos_get_proc_name_or_bundle(pid, out_name, max_len)) {
                                 found = 1;
                                 break;
                             }
@@ -2005,6 +2024,9 @@ static void macos_set_service_proxy(const char *service, int enable, int port) {
         system(cmd);
         snprintf(cmd, sizeof(cmd), "networksetup -setproxybypassdomains \"%s\" 127.0.0.1 localhost *.local 169.254/16 >/dev/null 2>&1", service);
         system(cmd);
+        snprintf(cmd, sizeof(cmd), "networksetup -setdnsservers \"%s\" 1.1.1.1 1.0.0.1 8.8.8.8 >/dev/null 2>&1", service);
+        system(cmd);
+        system("dscacheutil -flushcache >/dev/null 2>&1");
     } else {
         snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxystate \"%s\" off >/dev/null 2>&1", service);
         system(cmd);
@@ -2012,6 +2034,9 @@ static void macos_set_service_proxy(const char *service, int enable, int port) {
         system(cmd);
         snprintf(cmd, sizeof(cmd), "networksetup -setsecurewebproxystate \"%s\" off >/dev/null 2>&1", service);
         system(cmd);
+        snprintf(cmd, sizeof(cmd), "networksetup -setdnsservers \"%s\" \"Empty\" >/dev/null 2>&1", service);
+        system(cmd);
+        system("dscacheutil -flushcache >/dev/null 2>&1");
     }
 }
 
