@@ -1002,12 +1002,71 @@ static char s_split_apps[128][64];
 static int s_split_app_count = 0;
 static int s_tunnel_dns = 1;
 
+static char s_dns_servers[64][64];
+static int s_dns_server_count = 0;
+
+static char s_dns_resolvers[32][64];
+static int s_dns_resolver_count = 0;
+
+static const char *s_default_dns_servers[] = {
+    // Cloudflare DNS
+    "1.1.1.1", "1.0.0.1", "one.one.one.one", "cloudflare-dns.com",
+    // Google Public DNS
+    "8.8.8.8", "8.8.4.4", "dns.google",
+    // Quad9 (Malware blocking)
+    "9.9.9.9", "149.112.112.112", "dns.quad9.net",
+    // AdGuard DNS (Ad & tracker blocking)
+    "94.140.14.14", "94.140.15.15", "dns.adguard-dns.com",
+    // OpenDNS (Cisco)
+    "208.67.222.222", "208.67.220.220",
+    // Mullvad DNS
+    "194.242.2.2", "194.242.2.3", "dns.mullvad.net",
+    // Control D
+    "76.76.2.0", "76.76.10.0"
+};
+#define NUM_DEFAULT_DNS_SERVERS (int)(sizeof(s_default_dns_servers) / sizeof(s_default_dns_servers[0]))
+
+static const char *s_default_dns_resolvers[] = {
+    "mDNSResponder",
+    "systemd-resolved",
+    "dnsmasq",
+    "named",
+    "resolved",
+    "dnscrypt-proxy",
+    "stubby",
+    "unbound"
+};
+#define NUM_DEFAULT_DNS_RESOLVERS (int)(sizeof(s_default_dns_resolvers) / sizeof(s_default_dns_resolvers[0]))
+
 void alya_vpn_set_tunnel_dns(int enable) {
     s_tunnel_dns = enable ? 1 : 0;
 }
 
 int alya_vpn_get_tunnel_dns(void) {
     return s_tunnel_dns;
+}
+
+void alya_vpn_dns_clear(void) {
+    s_dns_server_count = 0;
+    s_dns_resolver_count = 0;
+}
+
+void alya_vpn_add_dns_server(const char *server) {
+    if (!server || !server[0] || s_dns_server_count >= 64) return;
+    size_t len = strlen(server);
+    if (len >= 64) return;
+    strncpy(s_dns_servers[s_dns_server_count], server, 63);
+    s_dns_servers[s_dns_server_count][63] = '\0';
+    s_dns_server_count++;
+}
+
+void alya_vpn_add_dns_resolver(const char *resolver) {
+    if (!resolver || !resolver[0] || s_dns_resolver_count >= 32) return;
+    size_t len = strlen(resolver);
+    if (len >= 64) return;
+    strncpy(s_dns_resolvers[s_dns_resolver_count], resolver, 63);
+    s_dns_resolvers[s_dns_resolver_count][63] = '\0';
+    s_dns_resolver_count++;
 }
 
 static int pattern_match_c(const char *pattern, const char *text) {
@@ -1137,12 +1196,21 @@ void alya_vpn_add_routing_app(const char *app_name) {
 int alya_vpn_should_route(const char *proc_name) {
     if (s_split_mode == 0) return 1; // route all
 
-    // System DNS resolvers are tunneled if tunnel_dns is enabled to prevent censorship/leaks
-    if (s_tunnel_dns && proc_name && (ALYA_STRICMP(proc_name, "mDNSResponder") == 0 ||
-                                      ALYA_STRICMP(proc_name, "systemd-resolved") == 0 ||
-                                      ALYA_STRICMP(proc_name, "dnsmasq") == 0 ||
-                                      ALYA_STRICMP(proc_name, "named") == 0)) {
-        return 1;
+    // System DNS resolvers are tunneled if tunnel_dns is enabled
+    if (s_tunnel_dns && proc_name && proc_name[0]) {
+        if (s_dns_resolver_count > 0) {
+            for (int i = 0; i < s_dns_resolver_count; ++i) {
+                if (pattern_match_c(s_dns_resolvers[i], proc_name)) {
+                    return 1;
+                }
+            }
+        } else {
+            for (int i = 0; i < NUM_DEFAULT_DNS_RESOLVERS; ++i) {
+                if (pattern_match_c(s_default_dns_resolvers[i], proc_name)) {
+                    return 1;
+                }
+            }
+        }
     }
 
     // In whitelist mode (1), unknown defaults to bypass (0) unless overridden by domain later.
@@ -1175,13 +1243,23 @@ int alya_vpn_should_route_host(const char *host, int port) {
     }
 
     // 2. DNS queries route via VPN if tunnel_dns is enabled
-    if (s_tunnel_dns && (port == 53 || port == 853 ||
-        strcmp(host, "1.1.1.1") == 0 || strcmp(host, "1.0.0.1") == 0 ||
-        strcmp(host, "8.8.8.8") == 0 || strcmp(host, "8.8.4.4") == 0 ||
-        strcmp(host, "9.9.9.9") == 0 || strcmp(host, "149.112.112.112") == 0 ||
-        strcmp(host, "one.one.one.one") == 0 || strcmp(host, "cloudflare-dns.com") == 0 ||
-        strcmp(host, "dns.google") == 0)) {
-        return 1;
+    if (s_tunnel_dns) {
+        if (port == 53 || port == 853) {
+            return 1;
+        }
+        if (s_dns_server_count > 0) {
+            for (int i = 0; i < s_dns_server_count; ++i) {
+                if (pattern_match_c(s_dns_servers[i], host)) {
+                    return 1;
+                }
+            }
+        } else {
+            for (int i = 0; i < NUM_DEFAULT_DNS_SERVERS; ++i) {
+                if (pattern_match_c(s_default_dns_servers[i], host)) {
+                    return 1;
+                }
+            }
+        }
     }
 
     // 3. Match host against configured split apps (e.g. "discord" in "updates.discord.com")

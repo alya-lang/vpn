@@ -22,13 +22,24 @@ function parse_socks5_request(client_sock)
 end
 
 # Starts the local SOCKS5 proxy and routes traffic according to split-tunneling configuration
-function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps, auto_sys_proxy, tunnel_dns)
+function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps, auto_sys_proxy, tunnel_dns, dns_servers, dns_resolvers)
     # 1. Initialize native session key in C
     alya_vpn_set_session_passphrase(passphrase)
     let session_key = crypto::vpn_derive_key(passphrase)
 
-    # 2. Configure DNS tunneling
+    # 2. Configure DNS tunneling, servers, and resolvers
     alya_vpn_set_tunnel_dns(tunnel_dns)
+    alya_vpn_dns_clear()
+    let dsi = 0
+    while dsi < len(dns_servers)
+        alya_vpn_add_dns_server(dns_servers[dsi])
+        dsi += 1
+    end
+    let dri = 0
+    while dri < len(dns_resolvers)
+        alya_vpn_add_dns_resolver(dns_resolvers[dri])
+        dri += 1
+    end
 
     # 3. Initialize native routing engine: set mode, then add each app individually.
     # NOTE: Alya array elements in string concatenation context are converted to their
@@ -70,7 +81,12 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
 
     let dns_str = "BYPASS (Local DNS)"
     if tunnel_dns == 1
-        dns_str = "TUNNELED (Remote Encrypted DNS)"
+        let srv_count = len(dns_servers)
+        if srv_count > 0
+            dns_str = "TUNNELED (" + srv_count + " custom DNS servers)"
+        else
+            dns_str = "TUNNELED (Built-in default DNS servers)"
+        end
     end
 
     say("[INFO] ========================================")

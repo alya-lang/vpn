@@ -63,6 +63,9 @@ int alya_vpn_should_route_host(const char *host, int port);
 int alya_vpn_infer_process_from_host(const char *host, char *out_proc_name, int max_len);
 void alya_vpn_set_tunnel_dns(int enable);
 int  alya_vpn_get_tunnel_dns(void);
+void alya_vpn_dns_clear(void);
+void alya_vpn_add_dns_server(const char *server);
+void alya_vpn_add_dns_resolver(const char *resolver);
 
 // Cross-platform idle sleep (ms). Use in event loops when no activity detected.
 void alya_vpn_sleep_ms(int ms);

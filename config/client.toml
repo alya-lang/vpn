@@ -7,10 +7,35 @@ passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
 crypto_threads = 1
 io_threads = 2
-# DNS Protection:
+
+[dns]
+# DNS Protection & Routing:
 #   true  - Route DNS queries through encrypted VPN tunnel to prevent ISP tampering/censorship (default).
 #   false - Use local network DNS for direct connections.
 tunnel_dns = true
+
+# Custom DNS servers to tunnel (IPs or hostnames/domains).
+# If empty, built-in defaults are used:
+# Cloudflare (1.1.1.1, 1.0.0.1, one.one.one.one, cloudflare-dns.com),
+# Google (8.8.8.8, 8.8.4.4, dns.google),
+# Quad9 (9.9.9.9, 149.112.112.112, dns.quad9.net),
+# AdGuard (94.140.14.14, 94.140.15.15, dns.adguard-dns.com),
+# OpenDNS (208.67.222.222, 208.67.220.220),
+# Mullvad (194.242.2.2, 194.242.2.3, dns.mullvad.net),
+# Control D (76.76.2.0, 76.76.10.0)
+dns_servers = [
+    # "1.1.1.1",
+    # "8.8.8.8",
+    # "9.9.9.9"
+]
+
+# System DNS resolver process names to tunnel.
+# If empty, built-in defaults are used:
+# mDNSResponder (macOS), systemd-resolved (Linux), dnsmasq, named, resolved, dnscrypt-proxy, stubby, unbound
+dns_resolvers = [
+    # "mDNSResponder",
+    # "systemd-resolved"
+]
 
 [split_tunnel]
 # Modes:
