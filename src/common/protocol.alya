@@ -187,4 +187,3 @@ function unpack_frame(session_key, frame_line)
     end
     return msg_type, plain
 end
-
