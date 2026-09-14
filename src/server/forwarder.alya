@@ -20,6 +20,12 @@ function vpn_run_server(cfg, client_thread_handler)
     let log_client_events = cfg["log_client_events"]
     let max_clients = cfg["max_clients"]
     let allowed_clients = cfg["allowed_clients"]
+    let bind_address = cfg["bind_address"]
+    let block_lan = cfg["block_lan_destinations"]
+    let blocked_ports = cfg["blocked_ports"]
+    let idle_timeout_sec = cfg["idle_timeout_sec"]
+    let show_stats = cfg["show_stats"]
+    let stats_interval_sec = cfg["stats_interval_sec"]
 
     # 1. Initialize thread pool
     let tp_init = tpool::thread_pool_init(crypto_threads, io_threads)
@@ -33,10 +39,20 @@ function vpn_run_server(cfg, client_thread_handler)
     alya_vpn_set_session_passphrase(passphrase)
     alya_vpn_set_tcp_nodelay(tcp_nodelay)
     alya_vpn_set_server_log_connections(log_connections)
+    alya_vpn_set_server_block_lan(block_lan)
+    alya_vpn_srv_set_max_clients(max_clients)
+    alya_vpn_set_idle_timeout_sec(idle_timeout_sec)
 
-    let server_sock = net::tcp_listen(listen_port, backlog)
+    alya_vpn_server_clear_blocked_ports()
+    let bpi = 0
+    while bpi < len(blocked_ports)
+        alya_vpn_server_add_blocked_port(blocked_ports[bpi])
+        bpi += 1
+    end
+
+    let server_sock = alya_vpn_tcp_listen(bind_address, listen_port, backlog)
     if server_sock < 0
-        say("[ERROR] Failed to bind VPN server to port " + listen_port)
+        say("[ERROR] Failed to bind VPN server to " + bind_address + ":" + listen_port)
         tpool::thread_pool_shutdown()
         return 1
     end
@@ -52,19 +68,32 @@ function vpn_run_server(cfg, client_thread_handler)
     if log_connections == 1
         log_str = "ON (Forward channel events)"
     end
+    let ssrf_str = "ENABLED (Protect local networks & cloud metadata)"
+    if block_lan == 0
+        ssrf_str = "DISABLED"
+    end
 
     say("[INFO] ========================================")
-    say("[INFO] Alya VPN Server running on port " + listen_port)
-    say("[INFO] Encryption:   ChaCha20-Poly1305 AEAD (256-bit)")
-    say("[INFO] Backlog:      " + backlog + " pending connections")
-    say("[INFO] Max Clients:  " + max_clients + " concurrent")
-    say("[INFO] Optimization: TCP_NODELAY=" + nodelay_str)
-    say("[INFO] Logging:      Connections=" + log_str)
+    say("[INFO] Alya VPN Server running on " + bind_address + ":" + listen_port)
+    say("[INFO] Encryption:      ChaCha20-Poly1305 AEAD (256-bit)")
+    say("[INFO] Backlog:         " + backlog + " pending connections")
+    say("[INFO] Max Clients:     " + max_clients + " concurrent")
+    say("[INFO] SSRF Protection: " + ssrf_str)
+    if len(blocked_ports) > 0
+        say("[INFO] Blocked Ports:   " + len(blocked_ports) + " restricted port(s)")
+    end
+    if idle_timeout_sec > 0
+        say("[INFO] Idle Timeout:    " + idle_timeout_sec + " seconds")
+    end
+    say("[INFO] Optimization:    TCP_NODELAY=" + nodelay_str)
+    say("[INFO] Logging:         Connections=" + log_str)
     if len(allowed_clients) > 0
-        say("[INFO] Security:     " + len(allowed_clients) + " allowed client IP(s)")
+        say("[INFO] Security:        " + len(allowed_clients) + " allowed client IP(s)")
     end
     say("[INFO] Waiting for incoming client connections...")
     say("[INFO] ========================================")
+
+    let last_stats_ms = alya_vpn_get_time_ms()
 
     while 1
         # Poll for new client connection (500ms timeout)
@@ -93,12 +122,27 @@ function vpn_run_server(cfg, client_thread_handler)
                     say("[WARN] Connection rejected from unauthorized client: " + client_ip)
                     net::tcp_close(client_sock)
                 else
-                    if log_client_events == 1
-                        say("[INFO] Client connected from " + client_ip + ":" + client_port)
+                    # Atomically enforce max clients limit
+                    if alya_vpn_srv_client_connected() == 0
+                        say("[WARN] Connection rejected: server reached maximum capacity (" + max_clients + " clients)")
+                        net::tcp_close(client_sock)
+                    else
+                        if log_client_events == 1
+                            say("[INFO] Client connected from " + client_ip + ":" + client_port + " (" + alya_vpn_srv_get_active_clients() + "/" + max_clients + " active)")
+                        end
+                        # Spawn via handler supplied by the importing entrypoint.
+                        thread::thread_spawn(client_thread_handler, client_sock)
                     end
-                    # Spawn via handler supplied by the importing entrypoint.
-                    thread::thread_spawn(client_thread_handler, client_sock)
                 end
+            end
+        end
+
+        # Periodic statistics report
+        if show_stats == 1
+            let now_ms = alya_vpn_get_time_ms()
+            if (now_ms - last_stats_ms) >= (stats_interval_sec * 1000)
+                say("[STATS] " + alya_vpn_stats_get_summary())
+                last_stats_ms = now_ms
             end
         end
     end
@@ -113,7 +157,8 @@ end
 function vpn_client_thread(client_sock)
     let client_ip = net::tcp_peer_ip(client_sock)
     vpn_handle_client(client_sock, "")
-    say("[INFO] Client disconnected: " + client_ip)
+    alya_vpn_srv_client_disconnected()
+    say("[INFO] Client disconnected: " + client_ip + " (" + alya_vpn_srv_get_active_clients() + " active)")
     return 0
 end
 

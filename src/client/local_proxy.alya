@@ -35,14 +35,21 @@ function vpn_run_client_proxy(cfg)
     let dns_servers = cfg["dns_servers"]
     let dns_resolvers = cfg["dns_resolvers"]
     let bypass_lan = cfg["bypass_lan"]
+    let bypass_lan_ranges = cfg["bypass_lan_ranges"]
     let auto_reconnect = cfg["auto_reconnect"]
     let reconnect_attempts = cfg["reconnect_attempts"]
     let reconnect_interval_ms = cfg["reconnect_interval_ms"]
     let handshake_timeout_ms = cfg["handshake_timeout_ms"]
     let connect_timeout_ms = cfg["connect_timeout_ms"]
+    let idle_timeout_sec = cfg["idle_timeout_sec"]
+    let ping_interval_sec = cfg["ping_interval_sec"]
+    let kill_switch = cfg["kill_switch"]
     let tcp_nodelay = cfg["tcp_nodelay"]
     let log_tunnel_traffic = cfg["log_tunnel_traffic"]
     let log_direct_traffic = cfg["log_direct_traffic"]
+    let bind_address = cfg["bind_address"]
+    let show_stats = cfg["show_stats"]
+    let stats_interval_sec = cfg["stats_interval_sec"]
 
     # 1. Initialize native session key in C
     alya_vpn_set_session_passphrase(passphrase)
@@ -62,12 +69,22 @@ function vpn_run_client_proxy(cfg)
         dri += 1
     end
 
-    # 3. Configure LAN bypass, timeouts, and low-latency TCP_NODELAY
+    # 3. Configure LAN bypass and custom subnets
     alya_vpn_set_bypass_lan(bypass_lan)
+    alya_vpn_clear_custom_lan()
+    let clri = 0
+    while clri < len(bypass_lan_ranges)
+        alya_vpn_add_custom_lan(bypass_lan_ranges[clri])
+        clri += 1
+    end
+
+    # 4. Configure timeouts, ping interval, and low-latency TCP_NODELAY
     alya_vpn_set_timeouts(handshake_timeout_ms, connect_timeout_ms)
     alya_vpn_set_tcp_nodelay(tcp_nodelay)
+    alya_vpn_set_idle_timeout_sec(idle_timeout_sec)
+    alya_vpn_set_ping_interval_sec(ping_interval_sec)
 
-    # 4. Configure domain routing rules (*.example.com, etc.)
+    # 5. Configure domain routing rules (*.example.com, etc.)
     alya_vpn_domain_clear()
     let dmi = 0
     while dmi < len(split_domains)
@@ -75,7 +92,7 @@ function vpn_run_client_proxy(cfg)
         dmi += 1
     end
 
-    # 5. Initialize native routing engine: set mode, then add each app individually
+    # 6. Initialize native routing engine: set mode, then add each app individually
     alya_vpn_set_routing(split_mode, "")
     let app_cnt = len(split_apps)
     let ai = 0
@@ -92,13 +109,13 @@ function vpn_run_client_proxy(cfg)
     end
     say("[INFO] Split-Tunneling: " + mode_desc)
 
-    # 6. Clear native channel tables
+    # 7. Clear native channel tables
     alya_vpn_ch_clear()
     alya_vpn_direct_clear()
 
-    let proxy_sock = net::tcp_listen(local_port, 64)
+    let proxy_sock = alya_vpn_tcp_listen(bind_address, local_port, 64)
     if proxy_sock < 0
-        say("[ERROR] Failed to start local SOCKS5 proxy on port " + local_port)
+        say("[ERROR] Failed to start local SOCKS5 proxy on " + bind_address + ":" + local_port)
         tpool::thread_pool_shutdown()
         return 1
     end
@@ -122,7 +139,11 @@ function vpn_run_client_proxy(cfg)
 
     let lan_str = "TUNNELED"
     if bypass_lan == 1
-        lan_str = "BYPASS (192.168.x, 10.x, 172.16-31.x, .local)"
+        if len(bypass_lan_ranges) > 0
+            lan_str = "BYPASS (LAN + " + len(bypass_lan_ranges) + " custom subnets)"
+        else
+            lan_str = "BYPASS (192.168.x, 10.x, 172.16-31.x, .local)"
+        end
     end
 
     let nodelay_str = "OFF"
@@ -130,15 +151,24 @@ function vpn_run_client_proxy(cfg)
         nodelay_str = "ON (Low latency)"
     end
 
+    let ks_str = "OFF"
+    if kill_switch == 1
+        ks_str = "ON (Block traffic on disconnect)"
+    end
+
     say("[INFO] ========================================")
     say("[INFO] Alya VPN Client Active")
-    say("[INFO] Local SOCKS5 Proxy: 127.0.0.1:" + local_port)
+    say("[INFO] Local SOCKS5 Proxy: " + bind_address + ":" + local_port)
     say("[INFO] Remote VPN Server:  " + server_host + ":" + server_port)
     say("[INFO] Split Tunnel Mode:  " + mode_str)
     say("[INFO] DNS Protection:     " + dns_str)
     say("[INFO] LAN Traffic:        " + lan_str)
+    say("[INFO] Kill Switch:        " + ks_str)
     say("[INFO] Rules: " + app_cnt + " application(s), " + len(split_domains) + " domain(s) configured")
     say("[INFO] Optimization:       TCP_NODELAY=" + nodelay_str + ", Handshake=" + handshake_timeout_ms + "ms")
+    if idle_timeout_sec > 0
+        say("[INFO] Idle Timeout:       " + idle_timeout_sec + "s, Ping=" + ping_interval_sec + "s")
+    end
     say("[INFO] ========================================")
 
     say("[INFO] Connecting to VPN tunnel server " + server_host + ":" + server_port + "...")
@@ -161,6 +191,7 @@ function vpn_run_client_proxy(cfg)
     tpool::thread_pool_assign_channel_worker(-1, 0)
 
     let next_channel_id = 1
+    let last_stats_ms = alya_vpn_get_time_ms()
 
     while 1
         if alya_vpn_is_stop_requested() == 1
@@ -238,6 +269,11 @@ function vpn_run_client_proxy(cfg)
         if vpn_res > 0
             activity = 1
         else if vpn_res < 0
+            if kill_switch == 1 and auto_reconnect == 0
+                say("[KILL-SWITCH] VPN server connection lost. Traffic blocked immediately to prevent IP leak.")
+                break
+            end
+
             if auto_reconnect == 1
                 say("[WARN] VPN server connection lost. Attempting auto-reconnect...")
                 net::tcp_close(vpn_sock)
@@ -263,7 +299,11 @@ function vpn_run_client_proxy(cfg)
                     attempt += 1
                 end
                 if reconnected == 0
-                    say("[ERROR] Max reconnect attempts reached. Exiting.")
+                    if kill_switch == 1
+                        say("[KILL-SWITCH] Max reconnect attempts reached. Traffic blocked.")
+                    else
+                        say("[ERROR] Max reconnect attempts reached. Exiting.")
+                    end
                     break
                 end
             else
@@ -276,6 +316,15 @@ function vpn_run_client_proxy(cfg)
         if alya_vpn_direct_count() > 0
             if alya_vpn_pump_direct() == 1
                 activity = 1
+            end
+        end
+
+        # 4. Periodic statistics report
+        if show_stats == 1
+            let now_ms = alya_vpn_get_time_ms()
+            if (now_ms - last_stats_ms) >= (stats_interval_sec * 1000)
+                say("[STATS] " + alya_vpn_stats_get_summary())
+                last_stats_ms = now_ms
             end
         end
 

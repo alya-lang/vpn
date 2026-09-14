@@ -10,7 +10,7 @@ import "./common/protocol.alya" as proto
 
 function print_banner()
     say("=================================================================")
-    say("           A L Y A   V P N   T U N N E L   (v0.2.5)              ")
+    say("           A L Y A   V P N   T U N N E L   (v0.2.6)              ")
     say("   High-Performance ChaCha20-Poly1305 Split-Tunneling Network    ")
     say("=================================================================")
 end
@@ -20,16 +20,23 @@ function print_usage()
     say("Usage: alyac run src/main.alya -- <command> [options]\n")
     say("Commands:")
     say("  server                      Start the remote VPN tunnel server")
+    say("    --bind <ip>               Bind address (default: 0.0.0.0)")
     say("    --port <port>             Listen port (default: 51821)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
     say("    --backlog <N>             Pending connection queue (default: 128)")
     say("    --max-clients <N>         Max concurrent clients (default: 100)")
+    say("    --block-lan <bool>        SSRF protection: block internal LAN destinations (default: true)")
+    say("    --blocked-ports <p1,p2>   Blocked destination ports (e.g. 25, 465, 587)")
+    say("    --idle-timeout <sec>      Channel idle timeout in seconds (default: 300, 0=off)")
     say("    --tcp-nodelay <bool>      Disable Nagle algorithm for low latency (default: true)")
     say("    --log-connections <bool>  Log each forward channel event (default: true)")
     say("    --quiet                   Disable forward channel logging")
+    say("    --stats                   Display periodic traffic stats")
+    say("    --stats-interval <sec>    Traffic stats reporting interval (default: 60)")
     say("    --crypto-threads <N>      Crypto worker thread count (default: 2)")
     say("    --io-threads <N>          I/O worker thread count (default: 4)\n")
     say("  client                      Start the local client SOCKS5 proxy")
+    say("    --bind <ip>               Local bind address (default: 127.0.0.1)")
     say("    --server <host>           Remote VPN server host (default: 127.0.0.1)")
     say("    --port <port>             Remote VPN server port (default: 51821)")
     say("    --proxy <port>            Local SOCKS5 proxy port (default: 1080)")
@@ -42,6 +49,9 @@ function print_usage()
     say("                              e.g. 'discord,steamwebhelper.exe,*torrent*'")
     say("    --domains <d1,d2>         Comma-separated domain patterns (e.g. '*.discord.com')")
     say("    --bypass-lan <bool>       Bypass private LAN targets (default: true)")
+    say("    --kill-switch <bool>      Block traffic if VPN connection drops (default: false)")
+    say("    --idle-timeout <sec>      Channel idle timeout in seconds (default: 300, 0=off)")
+    say("    --ping-interval <sec>     Keep-alive ping interval in seconds (default: 30)")
     say("    --auto-reconnect <bool>   Auto reconnect on tunnel drops (default: true)")
     say("    --reconnect-attempts <N>  Max reconnect attempts (default: 10, 0=infinite)")
     say("    --reconnect-interval <ms> Delay between attempts in ms (default: 3000)")
@@ -50,8 +60,11 @@ function print_usage()
     say("    --tcp-nodelay <bool>      Disable Nagle algorithm for low latency (default: true)")
     say("    --log-direct              Show direct bypass connections in log")
     say("    --quiet-direct            Hide direct bypass connections from log (default)")
+    say("    --stats                   Display periodic traffic stats")
+    say("    --stats-interval <sec>    Traffic stats reporting interval (default: 60)")
     say("    --crypto-threads <N>      Crypto worker thread count (default: 1)")
     say("    --io-threads <N>          I/O worker thread count (default: 2)")
+    say("    --auto-proxy              Automatically configure OS system proxy")
     say("    --no-system-proxy         Do not configure system proxy automatically\n")
     say("  check-port <port>           Diagnostic: inspect process owning local port")
     say("  benchmark                   Run ChaCha20-Poly1305 encryption benchmark\n")
@@ -96,9 +109,16 @@ function load_client_config(config_path)
         "server_host": "127.0.0.1",
         "server_port": 51821,
         "local_port": 1080,
+        "bind_address": "127.0.0.1",
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "mode": "exclude",
         "system_proxy": "true",
+        "auto_sys_proxy": "true",
+        "kill_switch": "false",
+        "idle_timeout_sec": 300,
+        "ping_interval_sec": 30,
+        "show_stats": "false",
+        "stats_interval_sec": 60,
         "crypto_threads": 1,
         "io_threads": 2,
         "tunnel_dns": "true",
@@ -114,7 +134,8 @@ function load_client_config(config_path)
         "apps": [],
         "domains": [],
         "dns_servers": [],
-        "dns_resolvers": []
+        "dns_resolvers": [],
+        "bypass_lan_ranges": []
     }
     let current_array = ""
     let i = 0
@@ -134,12 +155,25 @@ function load_client_config(config_path)
                 cfg["server_port"] = proto::parse_number(strip_val(val))
             else if key == "local_proxy_port" or key == "local_port"
                 cfg["local_port"] = proto::parse_number(strip_val(val))
+            else if key == "bind_address" or key == "bind_ip"
+                cfg["bind_address"] = strip_val(val)
             else if key == "passphrase"
                 cfg["passphrase"] = strip_val(val)
             else if key == "mode"
                 cfg["mode"] = strip_val(val)
-            else if key == "system_proxy" or key == "auto_system_proxy"
+            else if key == "system_proxy" or key == "auto_system_proxy" or key == "auto_sys_proxy"
                 cfg["system_proxy"] = strip_val(val)
+                cfg["auto_sys_proxy"] = strip_val(val)
+            else if key == "kill_switch"
+                cfg["kill_switch"] = strip_val(val)
+            else if key == "idle_timeout_sec" or key == "idle_timeout"
+                cfg["idle_timeout_sec"] = proto::parse_number(strip_val(val))
+            else if key == "ping_interval_sec" or key == "ping_interval"
+                cfg["ping_interval_sec"] = proto::parse_number(strip_val(val))
+            else if key == "show_stats" or key == "stats"
+                cfg["show_stats"] = strip_val(val)
+            else if key == "stats_interval_sec" or key == "stats_interval"
+                cfg["stats_interval_sec"] = proto::parse_number(strip_val(val))
             else if key == "crypto_threads"
                 cfg["crypto_threads"] = proto::parse_number(strip_val(val))
             else if key == "io_threads"
@@ -164,7 +198,7 @@ function load_client_config(config_path)
                 cfg["log_tunnel_traffic"] = strip_val(val)
             else if key == "log_direct_traffic"
                 cfg["log_direct_traffic"] = strip_val(val)
-            else if key == "apps" or key == "domains" or key == "dns_servers" or key == "dns_resolvers"
+            else if key == "apps" or key == "domains" or key == "dns_servers" or key == "dns_resolvers" or key == "bypass_lan_ranges"
                 current_array = key
                 let bracket_open = proto::find_char(val, "[")
                 let bracket_close = proto::find_char(val, "]")
@@ -223,12 +257,18 @@ function load_server_config(config_path)
     let content = read_file(config_path)
     let lines = proto::split_string(content, "\n")
     let cfg = {
+        "bind_address": "0.0.0.0",
         "port": 51821,
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "crypto_threads": 2,
         "io_threads": 4,
         "backlog": 128,
         "max_clients": 100,
+        "block_lan_destinations": "true",
+        "blocked_ports": [],
+        "idle_timeout_sec": 300,
+        "show_stats": "false",
+        "stats_interval_sec": 60,
         "tcp_nodelay": "true",
         "log_connections": "true",
         "log_client_events": "true",
@@ -248,6 +288,8 @@ function load_server_config(config_path)
             let val = line.substring(eq_idx + 1)
             if key == "port"
                 cfg["port"] = proto::parse_number(strip_val(val))
+            else if key == "bind_address" or key == "bind_ip"
+                cfg["bind_address"] = strip_val(val)
             else if key == "passphrase"
                 cfg["passphrase"] = strip_val(val)
             else if key == "crypto_threads"
@@ -258,13 +300,21 @@ function load_server_config(config_path)
                 cfg["backlog"] = proto::parse_number(strip_val(val))
             else if key == "max_clients"
                 cfg["max_clients"] = proto::parse_number(strip_val(val))
+            else if key == "block_lan_destinations" or key == "block_lan" or key == "ssrf_protection"
+                cfg["block_lan_destinations"] = strip_val(val)
+            else if key == "idle_timeout_sec" or key == "idle_timeout"
+                cfg["idle_timeout_sec"] = proto::parse_number(strip_val(val))
+            else if key == "show_stats" or key == "stats"
+                cfg["show_stats"] = strip_val(val)
+            else if key == "stats_interval_sec" or key == "stats_interval"
+                cfg["stats_interval_sec"] = proto::parse_number(strip_val(val))
             else if key == "tcp_nodelay" or key == "nodelay"
                 cfg["tcp_nodelay"] = strip_val(val)
             else if key == "log_connections"
                 cfg["log_connections"] = strip_val(val)
             else if key == "log_client_events"
                 cfg["log_client_events"] = strip_val(val)
-            else if key == "allowed_clients" or key == "whitelist"
+            else if key == "allowed_clients" or key == "whitelist" or key == "blocked_ports"
                 current_array = key
                 let bracket_open = proto::find_char(val, "[")
                 let bracket_close = proto::find_char(val, "]")
@@ -275,7 +325,11 @@ function load_server_config(config_path)
                     while k < len(items)
                         let it = strip_val(items[k])
                         if len(it) > 0
-                            cfg["allowed_clients"].push(it)
+                            if current_array == "blocked_ports"
+                                cfg["blocked_ports"].push(proto::parse_number(it))
+                            else
+                                cfg["allowed_clients"].push(it)
+                            end
                         end
                         k += 1
                     end
@@ -293,7 +347,11 @@ function load_server_config(config_path)
                 while k < len(items)
                     let it = strip_val(items[k])
                     if len(it) > 0
-                        cfg["allowed_clients"].push(it)
+                        if current_array == "blocked_ports"
+                            cfg["blocked_ports"].push(proto::parse_number(it))
+                        else
+                            cfg["allowed_clients"].push(it)
+                        end
                     end
                     k += 1
                 end
@@ -304,7 +362,11 @@ function load_server_config(config_path)
                 while k < len(items)
                     let it = strip_val(items[k])
                     if len(it) > 0
-                        cfg["allowed_clients"].push(it)
+                        if current_array == "blocked_ports"
+                            cfg["blocked_ports"].push(proto::parse_number(it))
+                        else
+                            cfg["allowed_clients"].push(it)
+                        end
                     end
                     k += 1
                 end
@@ -326,12 +388,18 @@ function main()
 
     # --- COMMAND: SERVER ---
     if cmd == "server"
+        let bind_address = "0.0.0.0"
         let port = 51821
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let crypto_threads = 2
         let io_threads = 4
         let backlog = 128
         let max_clients = 100
+        let block_lan = 1
+        let blocked_ports = []
+        let idle_timeout_sec = 300
+        let show_stats = 0
+        let stats_interval_sec = 60
         let tcp_nodelay = 1
         let log_connections = 1
         let log_client_events = 1
@@ -341,12 +409,27 @@ function main()
         let srv_cfg_file = "config/server.toml"
         let file_cfg = load_server_config(srv_cfg_file)
         if file_cfg != null
+            if file_cfg["bind_address"] != null
+                bind_address = file_cfg["bind_address"]
+            end
             port = file_cfg["port"]
             pass = file_cfg["passphrase"]
             crypto_threads = file_cfg["crypto_threads"]
             io_threads = file_cfg["io_threads"]
             backlog = file_cfg["backlog"]
             max_clients = file_cfg["max_clients"]
+            if file_cfg["block_lan_destinations"] == "false" or file_cfg["block_lan_destinations"] == "0"
+                block_lan = 0
+            end
+            if file_cfg["idle_timeout_sec"] != null and file_cfg["idle_timeout_sec"] >= 0
+                idle_timeout_sec = file_cfg["idle_timeout_sec"]
+            end
+            if file_cfg["show_stats"] == "true" or file_cfg["show_stats"] == "1"
+                show_stats = 1
+            end
+            if file_cfg["stats_interval_sec"] != null and file_cfg["stats_interval_sec"] > 0
+                stats_interval_sec = file_cfg["stats_interval_sec"]
+            end
             if file_cfg["tcp_nodelay"] == "false" or file_cfg["tcp_nodelay"] == "0"
                 tcp_nodelay = 0
             end
@@ -359,6 +442,9 @@ function main()
             if len(file_cfg["allowed_clients"]) > 0
                 allowed_clients = file_cfg["allowed_clients"]
             end
+            if len(file_cfg["blocked_ports"]) > 0
+                blocked_ports = file_cfg["blocked_ports"]
+            end
         end
 
         let i = 1
@@ -366,12 +452,27 @@ function main()
             if args_list[i] == "--config" and i + 1 < len(args_list)
                 let custom_cfg = load_server_config(args_list[i + 1])
                 if custom_cfg != null
+                    if custom_cfg["bind_address"] != null
+                        bind_address = custom_cfg["bind_address"]
+                    end
                     port = custom_cfg["port"]
                     pass = custom_cfg["passphrase"]
                     crypto_threads = custom_cfg["crypto_threads"]
                     io_threads = custom_cfg["io_threads"]
                     backlog = custom_cfg["backlog"]
                     max_clients = custom_cfg["max_clients"]
+                    if custom_cfg["block_lan_destinations"] == "false" or custom_cfg["block_lan_destinations"] == "0"
+                        block_lan = 0
+                    end
+                    if custom_cfg["idle_timeout_sec"] != null and custom_cfg["idle_timeout_sec"] >= 0
+                        idle_timeout_sec = custom_cfg["idle_timeout_sec"]
+                    end
+                    if custom_cfg["show_stats"] == "true" or custom_cfg["show_stats"] == "1"
+                        show_stats = 1
+                    end
+                    if custom_cfg["stats_interval_sec"] != null and custom_cfg["stats_interval_sec"] > 0
+                        stats_interval_sec = custom_cfg["stats_interval_sec"]
+                    end
                     if custom_cfg["tcp_nodelay"] == "false" or custom_cfg["tcp_nodelay"] == "0"
                         tcp_nodelay = 0
                     end
@@ -384,7 +485,13 @@ function main()
                     if len(custom_cfg["allowed_clients"]) > 0
                         allowed_clients = custom_cfg["allowed_clients"]
                     end
+                    if len(custom_cfg["blocked_ports"]) > 0
+                        blocked_ports = custom_cfg["blocked_ports"]
+                    end
                 end
+                i += 2
+            else if (args_list[i] == "--bind" or args_list[i] == "--bind-address") and i + 1 < len(args_list)
+                bind_address = args_list[i + 1]
                 i += 2
             else if args_list[i] == "--port" and i + 1 < len(args_list)
                 port = proto::parse_number(args_list[i + 1])
@@ -397,6 +504,32 @@ function main()
                 i += 2
             else if args_list[i] == "--max-clients" and i + 1 < len(args_list)
                 max_clients = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--no-block-lan"
+                block_lan = 0
+                i += 1
+            else if args_list[i] == "--block-lan"
+                block_lan = 1
+                i += 1
+            else if args_list[i] == "--blocked-ports" and i + 1 < len(args_list)
+                let raw_bp = proto::split_string(args_list[i + 1], ",")
+                let k = 0
+                while k < len(raw_bp)
+                    let p_str = strip_val(raw_bp[k])
+                    if len(p_str) > 0
+                        blocked_ports.push(proto::parse_number(p_str))
+                    end
+                    k += 1
+                end
+                i += 2
+            else if args_list[i] == "--idle-timeout" and i + 1 < len(args_list)
+                idle_timeout_sec = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--stats"
+                show_stats = 1
+                i += 1
+            else if args_list[i] == "--stats-interval" and i + 1 < len(args_list)
+                stats_interval_sec = proto::parse_number(args_list[i + 1])
                 i += 2
             else if args_list[i] == "--tcp-nodelay" and i + 1 < len(args_list)
                 let nd = lower(args_list[i + 1])
@@ -430,12 +563,18 @@ function main()
 
         print_banner()
         let server_cfg = {
+            "bind_address": bind_address,
             "port": port,
             "passphrase": pass,
             "crypto_threads": crypto_threads,
             "io_threads": io_threads,
             "backlog": backlog,
             "max_clients": max_clients,
+            "block_lan_destinations": block_lan,
+            "blocked_ports": blocked_ports,
+            "idle_timeout_sec": idle_timeout_sec,
+            "show_stats": show_stats,
+            "stats_interval_sec": stats_interval_sec,
             "tcp_nodelay": tcp_nodelay,
             "log_connections": log_connections,
             "log_client_events": log_client_events,
@@ -447,6 +586,7 @@ function main()
 
     # --- COMMAND: CLIENT ---
     if cmd == "client"
+        let bind_address = "127.0.0.1"
         let srv_host = "127.0.0.1"
         let srv_port = 51821
         let proxy_port = 1080
@@ -454,18 +594,24 @@ function main()
         let split_mode = router::mode_exclude() # Default blacklist
         let app_list = ["Speedtest", "Discord", "Chrome", "curl"]
         let domain_list = []
-        let auto_sys_proxy = 1
+        let auto_sys_proxy = 0
         let tunnel_dns = 1
         let crypto_threads = 1
         let io_threads = 2
         let dns_servers = []
         let dns_resolvers = []
         let bypass_lan = 1
+        let bypass_lan_ranges = []
         let auto_reconnect = 1
         let reconnect_attempts = 10
         let reconnect_interval_ms = 3000
         let handshake_timeout_ms = 3000
         let connect_timeout_ms = 3000
+        let idle_timeout_sec = 300
+        let ping_interval_sec = 30
+        let kill_switch = 0
+        let show_stats = 0
+        let stats_interval_sec = 60
         let tcp_nodelay = 1
         let log_tunnel_traffic = 1
         let log_direct_traffic = 0
@@ -477,6 +623,9 @@ function main()
             srv_host = file_cfg["server_host"]
             srv_port = file_cfg["server_port"]
             proxy_port = file_cfg["local_port"]
+            if file_cfg["bind_address"] != null
+                bind_address = file_cfg["bind_address"]
+            end
             pass = file_cfg["passphrase"]
             crypto_threads = file_cfg["crypto_threads"]
             io_threads = file_cfg["io_threads"]
@@ -488,8 +637,15 @@ function main()
             else if m == "exc" or m == "exclude"
                 split_mode = router::mode_exclude()
             end
-            if file_cfg["system_proxy"] == "false" or file_cfg["system_proxy"] == "0"
+            if file_cfg["system_proxy"] == "true" or file_cfg["system_proxy"] == "1" or file_cfg["auto_sys_proxy"] == "true" or file_cfg["auto_sys_proxy"] == "1"
+                auto_sys_proxy = 1
+            else if file_cfg["system_proxy"] == "false" or file_cfg["system_proxy"] == "0" or file_cfg["auto_sys_proxy"] == "false" or file_cfg["auto_sys_proxy"] == "0"
                 auto_sys_proxy = 0
+            end
+            if file_cfg["kill_switch"] == "true" or file_cfg["kill_switch"] == "1"
+                kill_switch = 1
+            else if file_cfg["kill_switch"] == "false" or file_cfg["kill_switch"] == "0"
+                kill_switch = 0
             end
             if file_cfg["tunnel_dns"] == "false" or file_cfg["tunnel_dns"] == "0"
                 tunnel_dns = 0
@@ -508,6 +664,18 @@ function main()
             end
             if file_cfg["log_direct_traffic"] == "true" or file_cfg["log_direct_traffic"] == "1"
                 log_direct_traffic = 1
+            end
+            if file_cfg["show_stats"] == "true" or file_cfg["show_stats"] == "1"
+                show_stats = 1
+            end
+            if file_cfg["stats_interval_sec"] != null and file_cfg["stats_interval_sec"] > 0
+                stats_interval_sec = file_cfg["stats_interval_sec"]
+            end
+            if file_cfg["idle_timeout_sec"] != null and file_cfg["idle_timeout_sec"] >= 0
+                idle_timeout_sec = file_cfg["idle_timeout_sec"]
+            end
+            if file_cfg["ping_interval_sec"] != null and file_cfg["ping_interval_sec"] >= 0
+                ping_interval_sec = file_cfg["ping_interval_sec"]
             end
             if file_cfg["reconnect_attempts"] != null and file_cfg["reconnect_attempts"] >= 0
                 reconnect_attempts = file_cfg["reconnect_attempts"]
@@ -533,6 +701,9 @@ function main()
             if len(file_cfg["dns_resolvers"]) > 0
                 dns_resolvers = file_cfg["dns_resolvers"]
             end
+            if len(file_cfg["bypass_lan_ranges"]) > 0
+                bypass_lan_ranges = file_cfg["bypass_lan_ranges"]
+            end
         end
 
         let i = 1
@@ -543,6 +714,9 @@ function main()
                     srv_host = custom_cfg["server_host"]
                     srv_port = custom_cfg["server_port"]
                     proxy_port = custom_cfg["local_port"]
+                    if custom_cfg["bind_address"] != null
+                        bind_address = custom_cfg["bind_address"]
+                    end
                     pass = custom_cfg["passphrase"]
                     crypto_threads = custom_cfg["crypto_threads"]
                     io_threads = custom_cfg["io_threads"]
@@ -554,8 +728,15 @@ function main()
                     else if m == "exc" or m == "exclude"
                         split_mode = router::mode_exclude()
                     end
-                    if custom_cfg["system_proxy"] == "false" or custom_cfg["system_proxy"] == "0"
+                    if custom_cfg["system_proxy"] == "true" or custom_cfg["system_proxy"] == "1" or custom_cfg["auto_sys_proxy"] == "true" or custom_cfg["auto_sys_proxy"] == "1"
+                        auto_sys_proxy = 1
+                    else if custom_cfg["system_proxy"] == "false" or custom_cfg["system_proxy"] == "0" or custom_cfg["auto_sys_proxy"] == "false" or custom_cfg["auto_sys_proxy"] == "0"
                         auto_sys_proxy = 0
+                    end
+                    if custom_cfg["kill_switch"] == "true" or custom_cfg["kill_switch"] == "1"
+                        kill_switch = 1
+                    else if custom_cfg["kill_switch"] == "false" or custom_cfg["kill_switch"] == "0"
+                        kill_switch = 0
                     end
                     if custom_cfg["tunnel_dns"] == "false" or custom_cfg["tunnel_dns"] == "0"
                         tunnel_dns = 0
@@ -574,6 +755,18 @@ function main()
                     end
                     if custom_cfg["log_direct_traffic"] == "true" or custom_cfg["log_direct_traffic"] == "1"
                         log_direct_traffic = 1
+                    end
+                    if custom_cfg["show_stats"] == "true" or custom_cfg["show_stats"] == "1"
+                        show_stats = 1
+                    end
+                    if custom_cfg["stats_interval_sec"] != null and custom_cfg["stats_interval_sec"] > 0
+                        stats_interval_sec = custom_cfg["stats_interval_sec"]
+                    end
+                    if custom_cfg["idle_timeout_sec"] != null and custom_cfg["idle_timeout_sec"] >= 0
+                        idle_timeout_sec = custom_cfg["idle_timeout_sec"]
+                    end
+                    if custom_cfg["ping_interval_sec"] != null and custom_cfg["ping_interval_sec"] >= 0
+                        ping_interval_sec = custom_cfg["ping_interval_sec"]
                     end
                     if custom_cfg["reconnect_attempts"] != null and custom_cfg["reconnect_attempts"] >= 0
                         reconnect_attempts = custom_cfg["reconnect_attempts"]
@@ -599,7 +792,13 @@ function main()
                     if len(custom_cfg["dns_resolvers"]) > 0
                         dns_resolvers = custom_cfg["dns_resolvers"]
                     end
+                    if len(custom_cfg["bypass_lan_ranges"]) > 0
+                        bypass_lan_ranges = custom_cfg["bypass_lan_ranges"]
+                    end
                 end
+                i += 2
+            else if (args_list[i] == "--bind" or args_list[i] == "--bind-address") and i + 1 < len(args_list)
+                bind_address = args_list[i + 1]
                 i += 2
             else if args_list[i] == "--server" and i + 1 < len(args_list)
                 srv_host = args_list[i + 1]
@@ -660,6 +859,35 @@ function main()
             else if args_list[i] == "--no-bypass-lan"
                 bypass_lan = 0
                 i += 1
+            else if args_list[i] == "--bypass-lan-ranges" and i + 1 < len(args_list)
+                let raw_blr = proto::split_string(args_list[i + 1], ",")
+                let k = 0
+                while k < len(raw_blr)
+                    let it = strip_val(raw_blr[k])
+                    if len(it) > 0
+                        bypass_lan_ranges.push(it)
+                    end
+                    k += 1
+                end
+                i += 2
+            else if args_list[i] == "--kill-switch"
+                kill_switch = 1
+                i += 1
+            else if args_list[i] == "--no-kill-switch"
+                kill_switch = 0
+                i += 1
+            else if args_list[i] == "--idle-timeout" and i + 1 < len(args_list)
+                idle_timeout_sec = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--ping-interval" and i + 1 < len(args_list)
+                ping_interval_sec = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--stats"
+                show_stats = 1
+                i += 1
+            else if args_list[i] == "--stats-interval" and i + 1 < len(args_list)
+                stats_interval_sec = proto::parse_number(args_list[i + 1])
+                i += 2
             else if args_list[i] == "--log-direct"
                 log_direct_traffic = 1
                 i += 1
@@ -703,6 +931,9 @@ function main()
             else if args_list[i] == "--io-threads" and i + 1 < len(args_list)
                 io_threads = proto::parse_number(args_list[i + 1])
                 i += 2
+            else if args_list[i] == "--system-proxy" or args_list[i] == "--auto-proxy"
+                auto_sys_proxy = 1
+                i += 1
             else if args_list[i] == "--no-system-proxy" or args_list[i] == "--no-proxy"
                 auto_sys_proxy = 0
                 i += 1
@@ -731,6 +962,7 @@ function main()
         say("[INFO] Thread pool initialized: " + crypto_threads + " crypto workers, " + io_threads + " I/O workers")
 
         let client_cfg = {
+            "bind_address": bind_address,
             "local_port": proxy_port,
             "server_host": srv_host,
             "server_port": srv_port,
@@ -739,15 +971,21 @@ function main()
             "apps": app_list,
             "domains": domain_list,
             "auto_sys_proxy": auto_sys_proxy,
+            "kill_switch": kill_switch,
             "tunnel_dns": tunnel_dns,
             "dns_servers": dns_servers,
             "dns_resolvers": dns_resolvers,
             "bypass_lan": bypass_lan,
+            "bypass_lan_ranges": bypass_lan_ranges,
             "auto_reconnect": auto_reconnect,
             "reconnect_attempts": reconnect_attempts,
             "reconnect_interval_ms": reconnect_interval_ms,
             "handshake_timeout_ms": handshake_timeout_ms,
             "connect_timeout_ms": connect_timeout_ms,
+            "idle_timeout_sec": idle_timeout_sec,
+            "ping_interval_sec": ping_interval_sec,
+            "show_stats": show_stats,
+            "stats_interval_sec": stats_interval_sec,
             "tcp_nodelay": tcp_nodelay,
             "log_tunnel_traffic": log_tunnel_traffic,
             "log_direct_traffic": log_direct_traffic

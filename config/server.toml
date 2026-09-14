@@ -1,5 +1,7 @@
 # Alya VPN - Server Configuration
 [server]
+# Network interface address to bind to ("0.0.0.0" for all interfaces, or a specific local IP)
+bind_address = "0.0.0.0"
 port = 51821
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
@@ -13,6 +15,17 @@ backlog = 128
 max_clients = 100
 
 [security]
+# SSRF Protection: Prevent VPN clients from reaching internal server networks, loopback, or cloud metadata.
+# Blocks: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.169.254 (AWS/GCP metadata)
+block_lan_destinations = true
+
+# Restricted outbound destination ports to block (e.g. SMTP ports to prevent spam / abuse)
+blocked_ports = [
+    25,
+    465,
+    587
+]
+
 # IP whitelist: Only listed client IPs are permitted to connect.
 # Leave empty to allow any client with the correct shared passphrase.
 allowed_clients = [
@@ -23,6 +36,14 @@ allowed_clients = [
 [performance]
 # Low-latency TCP optimization (disables Nagle algorithm for gaming and voice chat)
 tcp_nodelay = true
+
+# Inactive forward channel teardown timeout in seconds (0 = disabled, default = 300s)
+idle_timeout_sec = 300
+
+[monitoring]
+# Periodically print server traffic statistics (Active clients, active channels, TX/RX throughput)
+show_stats = false
+stats_interval_sec = 60
 
 [logging]
 # Log each client connection and disconnection event

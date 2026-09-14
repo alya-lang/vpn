@@ -807,6 +807,45 @@ int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len
 
 #endif
 
+static uint32_t get_time_ms(void) {
+#if defined(_WIN32)
+    return (uint32_t)GetTickCount64();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)((ts.tv_sec * 1000) + (ts.tv_nsec / 1000000));
+#endif
+}
+
+uint32_t alya_vpn_get_time_ms(void) {
+    return get_time_ms();
+}
+
+static void close_sock(int s) {
+    if (s >= 0) {
+#if defined(_WIN32)
+        closesocket((SOCKET)s);
+#else
+        close(s);
+#endif
+    }
+}
+
+static void set_sock_nonblocking(int sock) {
+    if (sock < 0) return;
+#if defined(_WIN32)
+    u_long mode = 1;
+    ioctlsocket((SOCKET)sock, FIONBIO, &mode);
+#else
+    int flags = fcntl(sock, F_GETFL, 0);
+    if (flags != -1) fcntl(sock, F_SETFL, flags | O_NONBLOCK);
+#if defined(SO_NOSIGPIPE)
+    int opt = 1;
+    setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+#endif
+#endif
+}
+
 static int s_handshake_timeout_ms = 3000;
 static int s_connect_timeout_ms = 3000;
 static int s_tcp_nodelay = 1;
@@ -822,16 +861,6 @@ void alya_vpn_set_tcp_nodelay(int enable) {
 
 int alya_vpn_get_tcp_nodelay(void) {
     return s_tcp_nodelay;
-}
-
-static int s_srv_log_connections = 1;
-
-void alya_vpn_set_server_log_connections(int enable) {
-    s_srv_log_connections = enable ? 1 : 0;
-}
-
-int alya_vpn_get_server_log_connections(void) {
-    return s_srv_log_connections;
 }
 
 static void apply_socket_nodelay(int sock) {
@@ -853,6 +882,201 @@ static void set_socket_timeout(int sock, int timeout_ms) {
     setsockopt((SOCKET)sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
     setsockopt((SOCKET)sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
 #endif
+}
+
+int alya_vpn_tcp_listen(const char *bind_addr, int port, int backlog) {
+    if (port <= 0 || port >= 65536) return -1;
+    if (backlog <= 0) backlog = 128;
+
+    int s = (int)socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (s < 0) return -1;
+
+#if !defined(_WIN32)
+    int opt = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#if defined(SO_NOSIGPIPE)
+    setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+#endif
+#else
+    BOOL opt = TRUE;
+    setsockopt((SOCKET)s, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+#endif
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons((uint16_t)port);
+
+    if (!bind_addr || !bind_addr[0] || strcmp(bind_addr, "0.0.0.0") == 0) {
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    } else {
+        addr.sin_addr.s_addr = inet_addr(bind_addr);
+        if (addr.sin_addr.s_addr == INADDR_NONE) {
+            addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        }
+    }
+
+    if (bind((SOCKET)s, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        close_sock(s);
+        return -1;
+    }
+
+    if (listen((SOCKET)s, backlog) != 0) {
+        close_sock(s);
+        return -1;
+    }
+
+    set_sock_nonblocking(s);
+    apply_socket_nodelay(s);
+    return s;
+}
+
+static int s_srv_log_connections = 1;
+
+void alya_vpn_set_server_log_connections(int enable) {
+    s_srv_log_connections = enable ? 1 : 0;
+}
+
+int alya_vpn_get_server_log_connections(void) {
+    return s_srv_log_connections;
+}
+
+static int s_srv_block_lan = 1;
+
+void alya_vpn_set_server_block_lan(int enable) {
+    s_srv_block_lan = enable ? 1 : 0;
+}
+
+int alya_vpn_get_server_block_lan(void) {
+    return s_srv_block_lan;
+}
+
+static int s_srv_blocked_ports[64];
+static int s_srv_blocked_port_count = 0;
+
+void alya_vpn_server_clear_blocked_ports(void) {
+    s_srv_blocked_port_count = 0;
+}
+
+void alya_vpn_server_add_blocked_port(int port) {
+    if (port <= 0 || port >= 65536 || s_srv_blocked_port_count >= 64) return;
+    s_srv_blocked_ports[s_srv_blocked_port_count++] = port;
+}
+
+int alya_vpn_server_is_port_blocked(int port) {
+    for (int i = 0; i < s_srv_blocked_port_count; ++i) {
+        if (s_srv_blocked_ports[i] == port) return 1;
+    }
+    return 0;
+}
+
+static volatile int s_srv_active_clients = 0;
+static volatile int s_srv_max_clients = 100;
+
+void alya_vpn_srv_set_max_clients(int max_clients) {
+    if (max_clients > 0) s_srv_max_clients = max_clients;
+}
+
+int alya_vpn_srv_get_max_clients(void) {
+    return s_srv_max_clients;
+}
+
+int alya_vpn_srv_get_active_clients(void) {
+    return s_srv_active_clients;
+}
+
+int alya_vpn_srv_client_connected(void) {
+#if defined(_WIN32)
+    LONG current = InterlockedCompareExchange((LONG volatile *)&s_srv_active_clients, 0, 0);
+    while (current < s_srv_max_clients) {
+        LONG old = InterlockedCompareExchange((LONG volatile *)&s_srv_active_clients, current + 1, current);
+        if (old == current) return 1;
+        current = old;
+    }
+    return 0;
+#elif defined(__GNUC__) || defined(__clang__)
+    int current = __atomic_load_n(&s_srv_active_clients, __ATOMIC_RELAXED);
+    while (current < s_srv_max_clients) {
+        if (__atomic_compare_exchange_n(&s_srv_active_clients, &current, current + 1, 0, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED)) {
+            return 1;
+        }
+    }
+    return 0;
+#else
+    if (s_srv_active_clients < s_srv_max_clients) {
+        s_srv_active_clients++;
+        return 1;
+    }
+    return 0;
+#endif
+}
+
+void alya_vpn_srv_client_disconnected(void) {
+#if defined(_WIN32)
+    InterlockedDecrement((LONG volatile *)&s_srv_active_clients);
+#elif defined(__GNUC__) || defined(__clang__)
+    __atomic_fetch_sub(&s_srv_active_clients, 1, __ATOMIC_RELEASE);
+#else
+    if (s_srv_active_clients > 0) s_srv_active_clients--;
+#endif
+}
+
+static int s_idle_timeout_ms = 0;
+
+void alya_vpn_set_idle_timeout_sec(int sec) {
+    s_idle_timeout_ms = sec > 0 ? sec * 1000 : 0;
+}
+
+int alya_vpn_get_idle_timeout_sec(void) {
+    return s_idle_timeout_ms / 1000;
+}
+
+static int s_ping_interval_ms = 30000;
+
+void alya_vpn_set_ping_interval_sec(int sec) {
+    s_ping_interval_ms = sec > 0 ? sec * 1000 : 0;
+}
+
+int alya_vpn_get_ping_interval_sec(void) {
+    return s_ping_interval_ms / 1000;
+}
+
+static volatile uint64_t s_stats_tx_bytes = 0;
+static volatile uint64_t s_stats_rx_bytes = 0;
+static volatile uint64_t s_stats_tx_pkts = 0;
+static volatile uint64_t s_stats_rx_pkts = 0;
+
+void alya_vpn_stats_add_tx(uint32_t bytes) {
+#if defined(_WIN32)
+    InterlockedAdd64((LONG64 volatile *)&s_stats_tx_bytes, bytes);
+    InterlockedIncrement64((LONG64 volatile *)&s_stats_tx_pkts);
+#elif defined(__GNUC__) || defined(__clang__)
+    __atomic_fetch_add(&s_stats_tx_bytes, bytes, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&s_stats_tx_pkts, 1, __ATOMIC_RELAXED);
+#else
+    s_stats_tx_bytes += bytes;
+    s_stats_tx_pkts++;
+#endif
+}
+
+void alya_vpn_stats_add_rx(uint32_t bytes) {
+#if defined(_WIN32)
+    InterlockedAdd64((LONG64 volatile *)&s_stats_rx_bytes, bytes);
+    InterlockedIncrement64((LONG64 volatile *)&s_stats_rx_pkts);
+#elif defined(__GNUC__) || defined(__clang__)
+    __atomic_fetch_add(&s_stats_rx_bytes, bytes, __ATOMIC_RELAXED);
+    __atomic_fetch_add(&s_stats_rx_pkts, 1, __ATOMIC_RELAXED);
+#else
+    s_stats_rx_bytes += bytes;
+    s_stats_rx_pkts++;
+#endif
+}
+
+void alya_vpn_stats_reset(void) {
+    s_stats_tx_bytes = 0;
+    s_stats_rx_bytes = 0;
+    s_stats_tx_pkts = 0;
+    s_stats_rx_pkts = 0;
 }
 
 int alya_vpn_socks5_handshake(int client_sock, char *out_host, int max_host_len) {
@@ -1134,8 +1358,33 @@ void alya_vpn_add_routing_domain(const char *domain) {
     s_split_domain_count++;
 }
 
+static char s_custom_lan_ranges[64][64];
+static int s_custom_lan_range_count = 0;
+
+void alya_vpn_clear_custom_lan(void) {
+    s_custom_lan_range_count = 0;
+}
+
+void alya_vpn_add_custom_lan(const char *range_or_domain) {
+    if (!range_or_domain || !range_or_domain[0] || s_custom_lan_range_count >= 64) return;
+    size_t len = strlen(range_or_domain);
+    if (len >= 64) return;
+    strncpy(s_custom_lan_ranges[s_custom_lan_range_count], range_or_domain, 63);
+    s_custom_lan_ranges[s_custom_lan_range_count][63] = '\0';
+    s_custom_lan_range_count++;
+}
+
+static int pattern_match_c(const char *pattern, const char *text);
+
 static int is_lan_target(const char *host) {
     if (!host || !host[0]) return 0;
+
+    if (s_custom_lan_range_count > 0) {
+        for (int i = 0; i < s_custom_lan_range_count; ++i) {
+            if (pattern_match_c(s_custom_lan_ranges[i], host)) return 1;
+            if (strncmp(host, s_custom_lan_ranges[i], strlen(s_custom_lan_ranges[i])) == 0) return 1;
+        }
+    }
 
     size_t len = strlen(host);
     if (len >= 6 && ALYA_STRICMP(host + len - 6, ".local") == 0) return 1;
@@ -1453,6 +1702,7 @@ typedef struct {
     int in_use;
     int channel_id;
     int app_sock;
+    uint32_t last_activity_ms;
 } AlyaChannelEntry;
 
 typedef struct {
@@ -1461,56 +1711,35 @@ typedef struct {
     uint32_t connect_start_ms;
     int app_sock;
     int dest_sock;
+    uint32_t last_activity_ms;
 } AlyaDirectEntry;
 
 typedef struct {
     int in_use;
     int channel_id;
     int dest_sock;
+    uint32_t last_activity_ms;
 } AlyaSrvChannelEntry;
 
 static AlyaChannelEntry s_client_channels[ALYA_MAX_CHANNELS];
 static AlyaDirectEntry s_client_directs[ALYA_MAX_CHANNELS];
 static ALYA_THREAD_LOCAL AlyaSrvChannelEntry s_server_channels[ALYA_MAX_CHANNELS];
 
-static uint32_t get_time_ms(void) {
-#if defined(_WIN32)
-    return (uint32_t)GetTickCount64();
-#else
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (uint32_t)((ts.tv_sec * 1000) + (ts.tv_nsec / 1000000));
-#endif
-}
-
-static void close_sock(int s) {
-    if (s >= 0) {
-#if defined(_WIN32)
-        closesocket((SOCKET)s);
-#else
-        close(s);
-#endif
-    }
-}
-
-static void set_sock_nonblocking(int sock) {
-    if (sock < 0) return;
-#if defined(_WIN32)
-    u_long mode = 1;
-    ioctlsocket((SOCKET)sock, FIONBIO, &mode);
-#else
-    int flags = fcntl(sock, F_GETFL, 0);
-    if (flags != -1) fcntl(sock, F_SETFL, flags | O_NONBLOCK);
-#if defined(SO_NOSIGPIPE)
-    int opt = 1;
-    setsockopt(sock, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
-#endif
-#endif
+const char *alya_vpn_stats_get_summary(void) {
+    static char s_stats_buf[256];
+    double tx_mb = (double)s_stats_tx_bytes / (1024.0 * 1024.0);
+    double rx_mb = (double)s_stats_rx_bytes / (1024.0 * 1024.0);
+    int ch_count = alya_vpn_ch_count() + alya_vpn_direct_count() + alya_vpn_srv_ch_count();
+    snprintf(s_stats_buf, sizeof(s_stats_buf),
+             "Channels: %d | TX: %.2f MB (%llu pkts) | RX: %.2f MB (%llu pkts)",
+             ch_count, tx_mb, (unsigned long long)s_stats_tx_pkts, rx_mb, (unsigned long long)s_stats_rx_pkts);
+    return s_stats_buf;
 }
 
 static int is_would_block(void) {
+    int err = 0;
 #if defined(_WIN32)
-    int err = WSAGetLastError();
+    err = WSAGetLastError();
     return (err == WSAEWOULDBLOCK);
 #else
     return (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR);
@@ -1656,6 +1885,7 @@ void alya_vpn_ch_set(int channel_id, int app_sock) {
     for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
         if (s_client_channels[i].in_use && s_client_channels[i].channel_id == channel_id) {
             s_client_channels[i].app_sock = app_sock;
+            s_client_channels[i].last_activity_ms = get_time_ms();
             return;
         }
         if (!s_client_channels[i].in_use && free_slot < 0) {
@@ -1666,6 +1896,7 @@ void alya_vpn_ch_set(int channel_id, int app_sock) {
         s_client_channels[free_slot].in_use = 1;
         s_client_channels[free_slot].channel_id = channel_id;
         s_client_channels[free_slot].app_sock = app_sock;
+        s_client_channels[free_slot].last_activity_ms = get_time_ms();
     }
 }
 
@@ -1734,6 +1965,7 @@ void alya_vpn_direct_set_connecting(int app_sock, int dest_sock, int connecting)
             s_client_directs[i].dest_sock = dest_sock;
             s_client_directs[i].connecting = connecting;
             s_client_directs[i].connect_start_ms = get_time_ms();
+            s_client_directs[i].last_activity_ms = get_time_ms();
             return;
         }
         if (!s_client_directs[i].in_use && free_slot < 0) free_slot = i;
@@ -1744,6 +1976,7 @@ void alya_vpn_direct_set_connecting(int app_sock, int dest_sock, int connecting)
         s_client_directs[free_slot].dest_sock = dest_sock;
         s_client_directs[free_slot].connecting = connecting;
         s_client_directs[free_slot].connect_start_ms = get_time_ms();
+        s_client_directs[free_slot].last_activity_ms = get_time_ms();
     }
 }
 
@@ -1764,8 +1997,9 @@ int alya_vpn_pump_direct(void) {
 
         // Check if asynchronous connect is in progress
         if (s_client_directs[i].connecting) {
-            if (now - s_client_directs[i].connect_start_ms > 4000) {
-                // Timeout after 4 seconds
+            uint32_t conn_timeout = (s_connect_timeout_ms > 0) ? (uint32_t)s_connect_timeout_ms : 3000;
+            if (now - s_client_directs[i].connect_start_ms > conn_timeout) {
+                // Timeout after configured connect_timeout_ms
                 close_sock(a_sock);
                 close_sock(d_sock);
                 s_client_directs[i].in_use = 0;
@@ -1833,10 +2067,23 @@ int alya_vpn_pump_direct(void) {
 #endif
         }
 
+        // Idle timeout check for direct connection
+        if (s_idle_timeout_ms > 0 && !s_client_directs[i].connecting &&
+            (now - s_client_directs[i].last_activity_ms > (uint32_t)s_idle_timeout_ms)) {
+            close_sock(a_sock);
+            close_sock(d_sock);
+            s_client_directs[i].in_use = 0;
+            s_client_directs[i].app_sock = -1;
+            s_client_directs[i].dest_sock = -1;
+            continue;
+        }
+
         // 1. App -> Destination (uploading request / data / photos)
         int n1 = recv((SOCKET)a_sock, buf, sizeof(buf), 0);
         if (n1 > 0) {
             activity = 1;
+            s_client_directs[i].last_activity_ms = now;
+            alya_vpn_stats_add_tx((uint32_t)n1);
             if (send_all(d_sock, (const uint8_t *)buf, n1) < 0) {
                 close_sock(a_sock);
                 close_sock(d_sock);
@@ -1868,6 +2115,8 @@ int alya_vpn_pump_direct(void) {
         int n2 = recv((SOCKET)d_sock, buf, sizeof(buf), 0);
         if (n2 > 0) {
             activity = 1;
+            s_client_directs[i].last_activity_ms = now;
+            alya_vpn_stats_add_rx((uint32_t)n2);
             if (send_all(a_sock, (const uint8_t *)buf, n2) < 0) {
                 close_sock(a_sock);
                 close_sock(d_sock);
@@ -1972,6 +2221,7 @@ void alya_vpn_srv_ch_set(int channel_id, int dest_sock) {
     for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
         if (s_server_channels[i].in_use && s_server_channels[i].channel_id == channel_id) {
             s_server_channels[i].dest_sock = dest_sock;
+            s_server_channels[i].last_activity_ms = get_time_ms();
             return;
         }
         if (!s_server_channels[i].in_use && free_slot < 0) free_slot = i;
@@ -1980,6 +2230,7 @@ void alya_vpn_srv_ch_set(int channel_id, int dest_sock) {
         s_server_channels[free_slot].in_use = 1;
         s_server_channels[free_slot].channel_id = channel_id;
         s_server_channels[free_slot].dest_sock = dest_sock;
+        s_server_channels[free_slot].last_activity_ms = get_time_ms();
     }
 }
 
@@ -2081,10 +2332,38 @@ int alya_vpn_open_client_channel(int vpn_sock, int channel_id, const char *host,
     return 0;
 }
 
+int alya_vpn_send_ping(int sock, int ch_id) {
+    if (sock < 0) return -1;
+    uint8_t frame_buf[ALYA_AV02_HEADER_LEN + 16];
+    int flen = alya_vpn_pack_frame_av02(
+        ALYA_AV02_MSG_PING,
+        (uint32_t)ch_id,
+        NULL,
+        0,
+        frame_buf,
+        sizeof(frame_buf)
+    );
+    if (flen > 0) {
+        return send_all(sock, frame_buf, flen) == flen ? 0 : -1;
+    }
+    return -1;
+}
+
 int alya_vpn_pump_client_vpn(int vpn_sock) {
     if (vpn_sock < 0) return -1;
     set_sock_nonblocking(vpn_sock);
     int activity = 0;
+    uint32_t now_client = get_time_ms();
+
+    // Arka plan keep-alive ping (NAT tablosunun düşmesini önler)
+    static uint32_t s_last_ping_ms = 0;
+    if (s_ping_interval_ms > 0) {
+        if (s_last_ping_ms == 0) s_last_ping_ms = now_client;
+        if (now_client - s_last_ping_ms >= (uint32_t)s_ping_interval_ms) {
+            s_last_ping_ms = now_client;
+            alya_vpn_send_ping(vpn_sock, 0);
+        }
+    }
 
     // 1. Read incoming data from vpn_sock
     if (s_vpn_client_rx_len < (int)sizeof(s_vpn_client_rx)) {
@@ -2093,6 +2372,7 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
         if (n > 0) {
             activity = 1;
             s_vpn_client_rx_len += n;
+            alya_vpn_stats_add_rx((uint32_t)n);
         } else if (n == 0) {
             s_vpn_client_rx_len = 0;
             return -1; // VPN server disconnected
@@ -2148,6 +2428,12 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
                 int app_sock = alya_vpn_ch_get((int)out_ch);
                 if (app_sock >= 0 && out_plen > 0) {
                     send_all(app_sock, s_client_plain, (int)out_plen);
+                    for (int k = 0; k < ALYA_MAX_CHANNELS; ++k) {
+                        if (s_client_channels[k].in_use && s_client_channels[k].channel_id == (int)out_ch) {
+                            s_client_channels[k].last_activity_ms = now_client;
+                            break;
+                        }
+                    }
                 }
             } else if (out_type == ALYA_AV02_MSG_CLOSE) {
                 int app_sock = alya_vpn_ch_get((int)out_ch);
@@ -2163,6 +2449,8 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
                         alya_vpn_ch_remove((int)out_ch);
                     }
                 }
+            } else if (out_type == ALYA_AV02_MSG_PONG) {
+                // Keep-alive heartbeat pong received
             }
         }
 
@@ -2180,9 +2468,30 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
         int app_sock = s_client_channels[i].app_sock;
         if (app_sock < 0) continue;
 
+        // Channel idle timeout check
+        if (s_idle_timeout_ms > 0 && (now_client - s_client_channels[i].last_activity_ms > (uint32_t)s_idle_timeout_ms)) {
+            int flen = alya_vpn_pack_frame_av02(
+                ALYA_AV02_MSG_CLOSE,
+                (uint32_t)ch_id,
+                NULL,
+                0,
+                s_vpn_tx_frame,
+                sizeof(s_vpn_tx_frame)
+            );
+            if (flen > 0) {
+                send_all(vpn_sock, s_vpn_tx_frame, flen);
+            }
+            close_sock(app_sock);
+            s_client_channels[i].in_use = 0;
+            s_client_channels[i].app_sock = -1;
+            s_client_channels[i].channel_id = 0;
+            continue;
+        }
+
         int n = recv((SOCKET)app_sock, (char *)s_app_read, sizeof(s_app_read), 0);
         if (n > 0) {
             activity = 1;
+            s_client_channels[i].last_activity_ms = now_client;
             int flen = alya_vpn_pack_frame_av02(
                 ALYA_AV02_MSG_DATA,
                 (uint32_t)ch_id,
@@ -2303,6 +2612,12 @@ int alya_vpn_pump_server_vpn(int client_sock) {
                 int dest_sock = alya_vpn_srv_ch_get((int)out_ch);
                 if (dest_sock >= 0 && out_plen > 0) {
                     send_all(dest_sock, s_srv_plain, (int)out_plen);
+                    for (int k = 0; k < ALYA_MAX_CHANNELS; ++k) {
+                        if (s_server_channels[k].in_use && s_server_channels[k].channel_id == (int)out_ch) {
+                            s_server_channels[k].last_activity_ms = get_time_ms();
+                            break;
+                        }
+                    }
                 }
             } else if (out_type == ALYA_AV02_MSG_CONNECT_REQ) {
                 if (out_plen < sizeof(s_srv_plain)) {
@@ -2316,20 +2631,40 @@ int alya_vpn_pump_server_vpn(int client_sock) {
                 if (colon) {
                     *colon = '\0';
                     int port = atoi(colon + 1);
-                    int dest_sock = connect_target(target, port);
-                    if (dest_sock >= 0) {
-                        set_sock_nonblocking(dest_sock);
-                        apply_socket_nodelay(dest_sock);
-                        alya_vpn_srv_ch_set((int)out_ch, dest_sock);
-                        ok = 1;
+
+                    // 1. Security Check: Restricted / Blocked Ports (e.g. SMTP 25, 465, 587 anti-spam)
+                    if (alya_vpn_server_is_port_blocked(port)) {
                         if (s_srv_log_connections) {
-                            printf("[FORWARD] Connected: Channel %u -> %s:%d\n", out_ch, target, port);
+                            printf("[SECURITY] Blocked connection to restricted port %d: Channel %u -> %s:%d\n", port, out_ch, target, port);
+                            fflush(stdout);
+                        }
+                    }
+                    // 2. Security Check: SSRF protection (Block private LAN, loopback, and cloud metadata)
+                    else if (s_srv_block_lan && (is_lan_target(target) ||
+                             strcmp(target, "127.0.0.1") == 0 || strcmp(target, "localhost") == 0 ||
+                             strcmp(target, "::1") == 0 || strcmp(target, "0.0.0.0") == 0 ||
+                             strncmp(target, "169.254.", 8) == 0 || strncmp(target, "10.", 3) == 0 ||
+                             strncmp(target, "192.168.", 8) == 0 || strncmp(target, "172.", 4) == 0)) {
+                        if (s_srv_log_connections) {
+                            printf("[SECURITY] Blocked SSRF connection to private LAN destination: Channel %u -> %s:%d\n", out_ch, target, port);
                             fflush(stdout);
                         }
                     } else {
-                        if (s_srv_log_connections) {
-                            printf("[FORWARD] Failed to connect: Channel %u -> %s:%d\n", out_ch, target, port);
-                            fflush(stdout);
+                        int dest_sock = connect_target(target, port);
+                        if (dest_sock >= 0) {
+                            set_sock_nonblocking(dest_sock);
+                            apply_socket_nodelay(dest_sock);
+                            alya_vpn_srv_ch_set((int)out_ch, dest_sock);
+                            ok = 1;
+                            if (s_srv_log_connections) {
+                                printf("[FORWARD] Connected: Channel %u -> %s:%d\n", out_ch, target, port);
+                                fflush(stdout);
+                            }
+                        } else {
+                            if (s_srv_log_connections) {
+                                printf("[FORWARD] Failed to connect: Channel %u -> %s:%d\n", out_ch, target, port);
+                                fflush(stdout);
+                            }
                         }
                     }
                 }
@@ -2372,6 +2707,7 @@ int alya_vpn_pump_server_vpn(int client_sock) {
 
     // 2. Read from active destination channels -> encrypt & send to client_sock
     static ALYA_THREAD_LOCAL uint8_t s_dest_read[32768];
+    uint32_t now_srv = get_time_ms();
 
     for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
         if (!s_server_channels[i].in_use) continue;
@@ -2379,9 +2715,30 @@ int alya_vpn_pump_server_vpn(int client_sock) {
         int dest_sock = s_server_channels[i].dest_sock;
         if (dest_sock < 0) continue;
 
+        // Channel idle timeout check on server
+        if (s_idle_timeout_ms > 0 && (now_srv - s_server_channels[i].last_activity_ms > (uint32_t)s_idle_timeout_ms)) {
+            int flen = alya_vpn_pack_frame_av02(
+                ALYA_AV02_MSG_CLOSE,
+                (uint32_t)ch_id,
+                NULL,
+                0,
+                s_srv_tx_frame,
+                sizeof(s_srv_tx_frame)
+            );
+            if (flen > 0) {
+                send_all(client_sock, s_srv_tx_frame, flen);
+            }
+            close_sock(dest_sock);
+            s_server_channels[i].in_use = 0;
+            s_server_channels[i].dest_sock = -1;
+            s_server_channels[i].channel_id = 0;
+            continue;
+        }
+
         int n = recv((SOCKET)dest_sock, (char *)s_dest_read, sizeof(s_dest_read), 0);
         if (n > 0) {
             activity = 1;
+            s_server_channels[i].last_activity_ms = now_srv;
             int flen = alya_vpn_pack_frame_av02(
                 ALYA_AV02_MSG_DATA,
                 (uint32_t)ch_id,

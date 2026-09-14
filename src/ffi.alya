@@ -52,6 +52,39 @@ extern "C"
     function alya_vpn_set_server_log_connections(enable: i32) -> void
     function alya_vpn_get_server_log_connections() -> i32
 
+    # Custom TCP listen (specific bind IP: 127.0.0.1, 0.0.0.0, etc.)
+    function alya_vpn_tcp_listen(bind_addr: str, port: i32, backlog: i32) -> i32
+
+    # Server SSRF Protection & Port Restriction
+    function alya_vpn_set_server_block_lan(enable: i32) -> void
+    function alya_vpn_get_server_block_lan() -> i32
+    function alya_vpn_server_clear_blocked_ports() -> void
+    function alya_vpn_server_add_blocked_port(port: i32) -> void
+    function alya_vpn_server_is_port_blocked(port: i32) -> i32
+
+    # Server Max Clients & Atomic Active Client Tracking
+    function alya_vpn_srv_set_max_clients(max_clients: i32) -> void
+    function alya_vpn_srv_get_max_clients() -> i32
+    function alya_vpn_srv_get_active_clients() -> i32
+    function alya_vpn_srv_client_connected() -> i32
+    function alya_vpn_srv_client_disconnected() -> void
+
+    # Client Custom LAN Ranges
+    function alya_vpn_clear_custom_lan() -> void
+    function alya_vpn_add_custom_lan(range_or_domain: str) -> void
+
+    # Channel Idle Timeout & Keep-Alive Ping
+    function alya_vpn_set_idle_timeout_sec(sec: i32) -> void
+    function alya_vpn_get_idle_timeout_sec() -> i32
+    function alya_vpn_set_ping_interval_sec(sec: i32) -> void
+    function alya_vpn_get_ping_interval_sec() -> i32
+    function alya_vpn_send_ping(sock: i32, ch_id: i32) -> i32
+
+    # Traffic Metrics & Timing
+    function alya_vpn_stats_get_summary() -> str
+    function alya_vpn_stats_reset() -> void
+    function alya_vpn_get_time_ms() -> i32
+
     # Client Channel Table (O(1), zero Alya allocations)
     function alya_vpn_ch_set(channel_id: i32, app_sock: i32) -> void
     function alya_vpn_ch_get(channel_id: i32) -> i32

@@ -1,6 +1,8 @@
 #ifndef ALYA_VPN_PROC_RESOLVER_H
 #define ALYA_VPN_PROC_RESOLVER_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -81,6 +83,41 @@ void alya_vpn_set_tcp_nodelay(int enable);
 int  alya_vpn_get_tcp_nodelay(void);
 void alya_vpn_set_server_log_connections(int enable);
 int  alya_vpn_get_server_log_connections(void);
+
+// Cross-platform custom TCP listen (supports specific bind IP: 127.0.0.1, 0.0.0.0, etc.)
+int  alya_vpn_tcp_listen(const char *bind_addr, int port, int backlog);
+
+// Server SSRF Protection (Block LAN / Loopback destinations)
+void alya_vpn_set_server_block_lan(int enable);
+int  alya_vpn_get_server_block_lan(void);
+
+// Server Blocked Ports (e.g. SMTP 25, 465, 587 anti-spam)
+void alya_vpn_server_clear_blocked_ports(void);
+void alya_vpn_server_add_blocked_port(int port);
+int  alya_vpn_server_is_port_blocked(int port);
+
+// Server Max Clients & Atomic Active Client Tracking
+void alya_vpn_srv_set_max_clients(int max_clients);
+int  alya_vpn_srv_get_max_clients(void);
+int  alya_vpn_srv_get_active_clients(void);
+int  alya_vpn_srv_client_connected(void);
+void alya_vpn_srv_client_disconnected(void);
+
+// Client Custom LAN Ranges & Domains
+void alya_vpn_clear_custom_lan(void);
+void alya_vpn_add_custom_lan(const char *range_or_domain);
+
+// Channel Idle Timeout & Keep-Alive Ping
+void alya_vpn_set_idle_timeout_sec(int sec);
+int  alya_vpn_get_idle_timeout_sec(void);
+void alya_vpn_set_ping_interval_sec(int sec);
+int  alya_vpn_get_ping_interval_sec(void);
+int  alya_vpn_send_ping(int sock, int ch_id);
+
+// Traffic Metrics & Performance Statistics
+const char *alya_vpn_stats_get_summary(void);
+void alya_vpn_stats_reset(void);
+uint32_t alya_vpn_get_time_ms(void);
 
 // Cross-platform idle sleep (ms). Use in event loops when no activity detected.
 void alya_vpn_sleep_ms(int ms);

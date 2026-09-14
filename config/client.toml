@@ -1,12 +1,19 @@
 # Alya VPN - Client Configuration
 [client]
+# Network interface address to bind the local SOCKS5 proxy to
+# "127.0.0.1" for local machine only, or "0.0.0.0" to share across your local network
+bind_address = "127.0.0.1"
+local_proxy_port = 1080
+
 server_host = "127.0.0.1"
 server_port = 51821
-local_proxy_port = 1080
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
 crypto_threads = 1
 io_threads = 2
+
+# Automatically configure operating system proxy (Windows/macOS) on startup and restore on exit
+auto_sys_proxy = false
 
 [connection]
 # Automatically reconnect if VPN server connection drops
@@ -19,10 +26,24 @@ reconnect_interval_ms = 3000
 handshake_timeout_ms = 3000
 # Direct connection timeout in milliseconds
 connect_timeout_ms = 3000
+# Inactive connection teardown timeout in seconds (0 = disabled, default = 300s)
+idle_timeout_sec = 300
+# Keep-alive heartbeat ping interval in seconds to keep NAT sessions active (0 = disabled, default = 30s)
+ping_interval_sec = 30
+
+[security]
+# Kill Switch: If the VPN server connection drops or fails, block all split-tunnel traffic
+# and prevent unencrypted leakage via direct local network connections.
+kill_switch = false
 
 [performance]
 # Enable TCP_NODELAY (disables Nagle algorithm for lower latency in gaming and voice chat)
 tcp_nodelay = true
+
+[monitoring]
+# Periodically print client traffic statistics (Active tunnels, channels, TX/RX throughput)
+show_stats = false
+stats_interval_sec = 60
 
 [logging]
 # Show connections tunneled through the VPN in the console
@@ -67,6 +88,13 @@ mode = "include"
 
 # Bypass local LAN traffic (192.168.x.x, 10.x.x.x, 172.16-31.x.x, .local) even in "all" mode
 bypass_lan = true
+
+# Custom local network IP prefixes or internal domain suffixes to bypass directly (in addition to standard LAN)
+bypass_lan_ranges = [
+    # "192.168.1.0/24",
+    # "corp.internal",
+    # "nas.home"
+]
 
 # Target applications to route/bypass (process name or pattern, case-insensitive, .exe optional)
 apps = [
