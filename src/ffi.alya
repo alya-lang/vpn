@@ -49,6 +49,8 @@ extern "C"
     function alya_vpn_set_timeouts(handshake_ms: i32, connect_ms: i32) -> void
     function alya_vpn_set_tcp_nodelay(enable: i32) -> void
     function alya_vpn_get_tcp_nodelay() -> i32
+    function alya_vpn_set_server_log_connections(enable: i32) -> void
+    function alya_vpn_get_server_log_connections() -> i32
 
     # Client Channel Table (O(1), zero Alya allocations)
     function alya_vpn_ch_set(channel_id: i32, app_sock: i32) -> void

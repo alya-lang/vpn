@@ -9,7 +9,18 @@ import "../common/protocol.alya" as proto
 import "../common/thread_pool.alya" as tpool
 import "../ffi.alya"
 
-function vpn_run_server(listen_port, passphrase, client_thread_handler, crypto_threads, io_threads)
+function vpn_run_server(cfg, client_thread_handler)
+    let listen_port = cfg["port"]
+    let passphrase = cfg["passphrase"]
+    let crypto_threads = cfg["crypto_threads"]
+    let io_threads = cfg["io_threads"]
+    let backlog = cfg["backlog"]
+    let tcp_nodelay = cfg["tcp_nodelay"]
+    let log_connections = cfg["log_connections"]
+    let log_client_events = cfg["log_client_events"]
+    let max_clients = cfg["max_clients"]
+    let allowed_clients = cfg["allowed_clients"]
+
     # 1. Initialize thread pool
     let tp_init = tpool::thread_pool_init(crypto_threads, io_threads)
     if tp_init != 0
@@ -18,10 +29,12 @@ function vpn_run_server(listen_port, passphrase, client_thread_handler, crypto_t
     end
     say("[INFO] Thread pool initialized: " + crypto_threads + " crypto workers, " + io_threads + " I/O workers")
 
+    # 2. Configure native settings in C
     alya_vpn_set_session_passphrase(passphrase)
-    alya_vpn_set_tcp_nodelay(1)
-    let key = crypto::vpn_derive_key(passphrase)
-    let server_sock = net::tcp_listen(listen_port, 32)
+    alya_vpn_set_tcp_nodelay(tcp_nodelay)
+    alya_vpn_set_server_log_connections(log_connections)
+
+    let server_sock = net::tcp_listen(listen_port, backlog)
     if server_sock < 0
         say("[ERROR] Failed to bind VPN server to port " + listen_port)
         tpool::thread_pool_shutdown()
@@ -31,24 +44,61 @@ function vpn_run_server(listen_port, passphrase, client_thread_handler, crypto_t
     # Assign listen socket to I/O worker 0
     tpool::thread_pool_assign_channel_worker(-1, 0)
 
+    let nodelay_str = "OFF"
+    if tcp_nodelay == 1
+        nodelay_str = "ON (Low latency)"
+    end
+    let log_str = "OFF (Silent)"
+    if log_connections == 1
+        log_str = "ON (Forward channel events)"
+    end
+
     say("[INFO] ========================================")
     say("[INFO] Alya VPN Server running on port " + listen_port)
-    say("[INFO] Encryption: ChaCha20-Poly1305 AEAD (256-bit)")
+    say("[INFO] Encryption:   ChaCha20-Poly1305 AEAD (256-bit)")
+    say("[INFO] Backlog:      " + backlog + " pending connections")
+    say("[INFO] Max Clients:  " + max_clients + " concurrent")
+    say("[INFO] Optimization: TCP_NODELAY=" + nodelay_str)
+    say("[INFO] Logging:      Connections=" + log_str)
+    if len(allowed_clients) > 0
+        say("[INFO] Security:     " + len(allowed_clients) + " allowed client IP(s)")
+    end
     say("[INFO] Waiting for incoming client connections...")
     say("[INFO] ========================================")
 
     while 1
-        # Poll for new client connection (500ms timeout) - could submit to I/O worker
+        # Poll for new client connection (500ms timeout)
         let poll_res = net::tcp_poll(server_sock, 500)
         if poll_res == 1
             let client_sock = net::tcp_accept(server_sock)
             if client_sock >= 0
                 let client_ip = net::tcp_peer_ip(client_sock)
                 let client_port = net::tcp_peer_port(client_sock)
-                say("[INFO] Client connected from " + client_ip + ":" + client_port)
-                # Spawn via handler supplied by the importing entrypoint.
-                # Alya 0.0.14 miscompiles bare function references inside imported modules.
-                thread::thread_spawn(client_thread_handler, client_sock)
+
+                # Check IP whitelist if configured
+                let allowed = 1
+                if len(allowed_clients) > 0
+                    allowed = 0
+                    let aci = 0
+                    while aci < len(allowed_clients)
+                        if allowed_clients[aci] == client_ip
+                            allowed = 1
+                            break
+                        end
+                        aci += 1
+                    end
+                end
+
+                if allowed == 0
+                    say("[WARN] Connection rejected from unauthorized client: " + client_ip)
+                    net::tcp_close(client_sock)
+                else
+                    if log_client_events == 1
+                        say("[INFO] Client connected from " + client_ip + ":" + client_port)
+                    end
+                    # Spawn via handler supplied by the importing entrypoint.
+                    thread::thread_spawn(client_thread_handler, client_sock)
+                end
             end
         end
     end
@@ -60,8 +110,6 @@ end
 
 # Thread entry point: passed from main as server::vpn_client_thread.
 # Each call runs in its own OS thread with an isolated Alya heap.
-# session_key is passed as "" — C always uses the cached key from
-# alya_vpn_set_session_passphrase (immune to Alya bump allocator corruption).
 function vpn_client_thread(client_sock)
     let client_ip = net::tcp_peer_ip(client_sock)
     vpn_handle_client(client_sock, "")
@@ -93,7 +141,7 @@ function vpn_handle_client(client_sock, session_key)
     net::tcp_close(client_sock)
 end
 
-# Processes decrypted message from client
+# Processes decrypted message from client (for backward compatibility)
 function vpn_process_client_message(client_sock, session_key, msg_type, payload)
     # CONNECT REQUEST
     if msg_type == proto::msg_connect_req()
@@ -102,11 +150,8 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
             return 0
         end
 
-        say("[FORWARD] CONNECT requested: Channel " + ch_id + " -> " + host + ":" + port)
-
         let target_sock = net::tcp_connect(host, port)
         if target_sock < 0
-            say("[FORWARD] Failed to connect to " + host + ":" + port)
             let resp_payload = proto::pack_connect_resp_payload(ch_id, proto::status_connect_failed(), "Connection refused")
             let resp_frame = proto::pack_frame(session_key, proto::msg_connect_resp(), resp_payload)
             if resp_frame != null
@@ -116,7 +161,6 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
         end
 
         alya_vpn_srv_ch_set(ch_id, target_sock)
-        say("[FORWARD] Connected to " + host + ":" + port + " (Channel " + ch_id + ")")
 
         let ok_payload = proto::pack_connect_resp_payload(ch_id, proto::status_ok(), "Connected")
         let ok_frame = proto::pack_frame(session_key, proto::msg_connect_resp(), ok_payload)
@@ -148,7 +192,6 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
             if s >= 0
                 net::tcp_close(s)
                 alya_vpn_srv_ch_remove(ch_id)
-                say("[FORWARD] Closed channel " + ch_id)
             end
         end
         return 1

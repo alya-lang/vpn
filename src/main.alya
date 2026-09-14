@@ -10,7 +10,7 @@ import "./common/protocol.alya" as proto
 
 function print_banner()
     say("=================================================================")
-    say("           A L Y A   V P N   T U N N E L   (v0.2.4)              ")
+    say("           A L Y A   V P N   T U N N E L   (v0.2.5)              ")
     say("   High-Performance ChaCha20-Poly1305 Split-Tunneling Network    ")
     say("=================================================================")
 end
@@ -22,6 +22,11 @@ function print_usage()
     say("  server                      Start the remote VPN tunnel server")
     say("    --port <port>             Listen port (default: 51821)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
+    say("    --backlog <N>             Pending connection queue (default: 128)")
+    say("    --max-clients <N>         Max concurrent clients (default: 100)")
+    say("    --tcp-nodelay <bool>      Disable Nagle algorithm for low latency (default: true)")
+    say("    --log-connections <bool>  Log each forward channel event (default: true)")
+    say("    --quiet                   Disable forward channel logging")
     say("    --crypto-threads <N>      Crypto worker thread count (default: 2)")
     say("    --io-threads <N>          I/O worker thread count (default: 4)\n")
     say("  client                      Start the local client SOCKS5 proxy")
@@ -221,8 +226,15 @@ function load_server_config(config_path)
         "port": 51821,
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "crypto_threads": 2,
-        "io_threads": 4
+        "io_threads": 4,
+        "backlog": 128,
+        "max_clients": 100,
+        "tcp_nodelay": "true",
+        "log_connections": "true",
+        "log_client_events": "true",
+        "allowed_clients": []
     }
+    let current_array = ""
     let i = 0
     while i < len(lines)
         let line = lines[i]
@@ -242,6 +254,60 @@ function load_server_config(config_path)
                 cfg["crypto_threads"] = proto::parse_number(strip_val(val))
             else if key == "io_threads"
                 cfg["io_threads"] = proto::parse_number(strip_val(val))
+            else if key == "backlog"
+                cfg["backlog"] = proto::parse_number(strip_val(val))
+            else if key == "max_clients"
+                cfg["max_clients"] = proto::parse_number(strip_val(val))
+            else if key == "tcp_nodelay" or key == "nodelay"
+                cfg["tcp_nodelay"] = strip_val(val)
+            else if key == "log_connections"
+                cfg["log_connections"] = strip_val(val)
+            else if key == "log_client_events"
+                cfg["log_client_events"] = strip_val(val)
+            else if key == "allowed_clients" or key == "whitelist"
+                current_array = key
+                let bracket_open = proto::find_char(val, "[")
+                let bracket_close = proto::find_char(val, "]")
+                if bracket_open >= 0 and bracket_close > bracket_open
+                    let inside = val.substring(bracket_open + 1, bracket_close - bracket_open - 1)
+                    let items = proto::split_string(inside, ",")
+                    let k = 0
+                    while k < len(items)
+                        let it = strip_val(items[k])
+                        if len(it) > 0
+                            cfg["allowed_clients"].push(it)
+                        end
+                        k += 1
+                    end
+                    current_array = ""
+                else if proto::find_char(val, "]") >= 0
+                    current_array = ""
+                end
+            end
+        else if len(current_array) > 0
+            if proto::find_char(line, "]") >= 0
+                let bracket_idx = proto::find_char(line, "]")
+                let before_bracket = line.substring(0, bracket_idx)
+                let items = proto::split_string(before_bracket, ",")
+                let k = 0
+                while k < len(items)
+                    let it = strip_val(items[k])
+                    if len(it) > 0
+                        cfg["allowed_clients"].push(it)
+                    end
+                    k += 1
+                end
+                current_array = ""
+            else
+                let items = proto::split_string(line, ",")
+                let k = 0
+                while k < len(items)
+                    let it = strip_val(items[k])
+                    if len(it) > 0
+                        cfg["allowed_clients"].push(it)
+                    end
+                    k += 1
+                end
             end
         end
         i += 1
@@ -264,6 +330,12 @@ function main()
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let crypto_threads = 2
         let io_threads = 4
+        let backlog = 128
+        let max_clients = 100
+        let tcp_nodelay = 1
+        let log_connections = 1
+        let log_client_events = 1
+        let allowed_clients = []
 
         # Check default config/server.toml if exists
         let srv_cfg_file = "config/server.toml"
@@ -273,6 +345,20 @@ function main()
             pass = file_cfg["passphrase"]
             crypto_threads = file_cfg["crypto_threads"]
             io_threads = file_cfg["io_threads"]
+            backlog = file_cfg["backlog"]
+            max_clients = file_cfg["max_clients"]
+            if file_cfg["tcp_nodelay"] == "false" or file_cfg["tcp_nodelay"] == "0"
+                tcp_nodelay = 0
+            end
+            if file_cfg["log_connections"] == "false" or file_cfg["log_connections"] == "0"
+                log_connections = 0
+            end
+            if file_cfg["log_client_events"] == "false" or file_cfg["log_client_events"] == "0"
+                log_client_events = 0
+            end
+            if len(file_cfg["allowed_clients"]) > 0
+                allowed_clients = file_cfg["allowed_clients"]
+            end
         end
 
         let i = 1
@@ -284,6 +370,20 @@ function main()
                     pass = custom_cfg["passphrase"]
                     crypto_threads = custom_cfg["crypto_threads"]
                     io_threads = custom_cfg["io_threads"]
+                    backlog = custom_cfg["backlog"]
+                    max_clients = custom_cfg["max_clients"]
+                    if custom_cfg["tcp_nodelay"] == "false" or custom_cfg["tcp_nodelay"] == "0"
+                        tcp_nodelay = 0
+                    end
+                    if custom_cfg["log_connections"] == "false" or custom_cfg["log_connections"] == "0"
+                        log_connections = 0
+                    end
+                    if custom_cfg["log_client_events"] == "false" or custom_cfg["log_client_events"] == "0"
+                        log_client_events = 0
+                    end
+                    if len(custom_cfg["allowed_clients"]) > 0
+                        allowed_clients = custom_cfg["allowed_clients"]
+                    end
                 end
                 i += 2
             else if args_list[i] == "--port" and i + 1 < len(args_list)
@@ -292,6 +392,31 @@ function main()
             else if args_list[i] == "--pass" and i + 1 < len(args_list)
                 pass = args_list[i + 1]
                 i += 2
+            else if args_list[i] == "--backlog" and i + 1 < len(args_list)
+                backlog = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--max-clients" and i + 1 < len(args_list)
+                max_clients = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--tcp-nodelay" and i + 1 < len(args_list)
+                let nd = lower(args_list[i + 1])
+                if nd == "false" or nd == "0"
+                    tcp_nodelay = 0
+                else
+                    tcp_nodelay = 1
+                end
+                i += 2
+            else if args_list[i] == "--log-connections" and i + 1 < len(args_list)
+                let lc = lower(args_list[i + 1])
+                if lc == "false" or lc == "0"
+                    log_connections = 0
+                else
+                    log_connections = 1
+                end
+                i += 2
+            else if args_list[i] == "--quiet" or args_list[i] == "-q"
+                log_connections = 0
+                i += 1
             else if args_list[i] == "--crypto-threads" and i + 1 < len(args_list)
                 crypto_threads = proto::parse_number(args_list[i + 1])
                 i += 2
@@ -304,7 +429,19 @@ function main()
         end
 
         print_banner()
-        server::vpn_run_server(port, pass, server::vpn_client_thread, crypto_threads, io_threads)
+        let server_cfg = {
+            "port": port,
+            "passphrase": pass,
+            "crypto_threads": crypto_threads,
+            "io_threads": io_threads,
+            "backlog": backlog,
+            "max_clients": max_clients,
+            "tcp_nodelay": tcp_nodelay,
+            "log_connections": log_connections,
+            "log_client_events": log_client_events,
+            "allowed_clients": allowed_clients
+        }
+        server::vpn_run_server(server_cfg, server::vpn_client_thread)
         return 0
     end
 

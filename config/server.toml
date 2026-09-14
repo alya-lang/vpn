@@ -6,6 +6,28 @@ protocol = "tcp"
 crypto_threads = 2
 io_threads = 4
 
+# Maximum pending connection queue
+backlog = 128
+
+# Maximum concurrent connected clients
+max_clients = 100
+
+[security]
+# IP whitelist: Only listed client IPs are permitted to connect.
+# Leave empty to allow any client with the correct shared passphrase.
+allowed_clients = [
+    # "198.51.100.42",
+    # "203.0.113.15"
+]
+
 [performance]
-# Low-latency TCP optimization (disables Nagle algorithm)
+# Low-latency TCP optimization (disables Nagle algorithm for gaming and voice chat)
 tcp_nodelay = true
+
+[logging]
+# Log each client connection and disconnection event
+log_client_events = true
+
+# Log each individual forward channel request ([FORWARD] Channel X -> host:port)
+# Set to false on high-traffic production servers to keep logs quiet and save disk I/O
+log_connections = true

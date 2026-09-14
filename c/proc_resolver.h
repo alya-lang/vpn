@@ -79,6 +79,8 @@ void alya_vpn_add_routing_domain(const char *domain);
 void alya_vpn_set_timeouts(int handshake_ms, int connect_ms);
 void alya_vpn_set_tcp_nodelay(int enable);
 int  alya_vpn_get_tcp_nodelay(void);
+void alya_vpn_set_server_log_connections(int enable);
+int  alya_vpn_get_server_log_connections(void);
 
 // Cross-platform idle sleep (ms). Use in event loops when no activity detected.
 void alya_vpn_sleep_ms(int ms);

@@ -824,6 +824,16 @@ int alya_vpn_get_tcp_nodelay(void) {
     return s_tcp_nodelay;
 }
 
+static int s_srv_log_connections = 1;
+
+void alya_vpn_set_server_log_connections(int enable) {
+    s_srv_log_connections = enable ? 1 : 0;
+}
+
+int alya_vpn_get_server_log_connections(void) {
+    return s_srv_log_connections;
+}
+
 static void apply_socket_nodelay(int sock) {
     if (!s_tcp_nodelay || sock < 0) return;
     int opt = 1;
@@ -2309,13 +2319,18 @@ int alya_vpn_pump_server_vpn(int client_sock) {
                     int dest_sock = connect_target(target, port);
                     if (dest_sock >= 0) {
                         set_sock_nonblocking(dest_sock);
+                        apply_socket_nodelay(dest_sock);
                         alya_vpn_srv_ch_set((int)out_ch, dest_sock);
                         ok = 1;
-                        printf("[FORWARD] Connected: Channel %u -> %s:%d\n", out_ch, target, port);
-                        fflush(stdout);
+                        if (s_srv_log_connections) {
+                            printf("[FORWARD] Connected: Channel %u -> %s:%d\n", out_ch, target, port);
+                            fflush(stdout);
+                        }
                     } else {
-                        printf("[FORWARD] Failed to connect: Channel %u -> %s:%d\n", out_ch, target, port);
-                        fflush(stdout);
+                        if (s_srv_log_connections) {
+                            printf("[FORWARD] Failed to connect: Channel %u -> %s:%d\n", out_ch, target, port);
+                            fflush(stdout);
+                        }
                     }
                 }
                 uint8_t status_byte = ok ? 0 : 1;
