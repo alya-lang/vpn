@@ -1,6 +1,6 @@
 # Alya VPN 🛡️
 
-[![Alya](https://img.shields.io/badge/Alya-0.0.14-blue.svg)](https://github.com/alya-lang/alya)
+[![Alya](https://img.shields.io/badge/Alya-0.0.16-blue.svg)](https://github.com/alya-lang/alya)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/Crypto-ChaCha20--Poly1305%20AEAD-green.svg)](#security--cryptography)
 [![Split-Tunneling](https://img.shields.io/badge/Split--Tunneling-Per--App%20Filter-purple.svg)](#split-tunneling-engine)
@@ -114,7 +114,7 @@ Any frame with an invalid Poly1305 MAC tag or invalid header is immediately drop
 ## 💻 Quick Start & Usage
 
 ### Prerequisites
-- [Alya Compiler](https://github.com/alya-lang/alya) (`alyac`) `v0.0.14` or later installed.
+- [Alya Compiler](https://github.com/alya-lang/alya) (`alyac`) `v0.0.16` or later installed.
 - C compiler (`gcc` or `clang`) for native C compilation via `[build]` directive.
 
 ### 1. Run the VPN Server (on VPS)
