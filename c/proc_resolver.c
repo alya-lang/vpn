@@ -24,6 +24,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <time.h>
+#include <poll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netdb.h>
@@ -1082,6 +1083,13 @@ int alya_vpn_should_route(const char *proc_name) {
         return 1;
     }
 
+    // Discord on macOS spawns ShipIt and multiple Discord Helper processes
+    if (proc_name && (ALYA_STRICMP(proc_name, "ShipIt") == 0 ||
+                      ALYA_STRICMP(proc_name, "com.hnc.Discord.ShipIt") == 0 ||
+                      ALYA_STRNICMP(proc_name, "Discord", 7) == 0)) {
+        return 1;
+    }
+
     // In whitelist mode (1), unknown defaults to bypass (0) unless overridden by domain later.
     // In blacklist mode (2), unknown defaults to route (1).
     int is_unknown = (!proc_name || !proc_name[0] || strcmp(proc_name, "unknown") == 0);
@@ -1115,7 +1123,9 @@ int alya_vpn_should_route_host(const char *host, int port) {
     if (port == 53 || port == 853 ||
         strcmp(host, "1.1.1.1") == 0 || strcmp(host, "1.0.0.1") == 0 ||
         strcmp(host, "8.8.8.8") == 0 || strcmp(host, "8.8.4.4") == 0 ||
-        strcmp(host, "one.one.one.one") == 0) {
+        strcmp(host, "9.9.9.9") == 0 || strcmp(host, "149.112.112.112") == 0 ||
+        strcmp(host, "one.one.one.one") == 0 || strcmp(host, "cloudflare-dns.com") == 0 ||
+        strcmp(host, "dns.google") == 0) {
         return 1;
     }
 
@@ -1183,6 +1193,8 @@ typedef struct {
 
 typedef struct {
     int in_use;
+    int connecting;
+    uint32_t connect_start_ms;
     int app_sock;
     int dest_sock;
 } AlyaDirectEntry;
@@ -1196,6 +1208,16 @@ typedef struct {
 static AlyaChannelEntry s_client_channels[ALYA_MAX_CHANNELS];
 static AlyaDirectEntry s_client_directs[ALYA_MAX_CHANNELS];
 static ALYA_THREAD_LOCAL AlyaSrvChannelEntry s_server_channels[ALYA_MAX_CHANNELS];
+
+static uint32_t get_time_ms(void) {
+#if defined(_WIN32)
+    return (uint32_t)GetTickCount64();
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint32_t)((ts.tv_sec * 1000) + (ts.tv_nsec / 1000000));
+#endif
+}
 
 static void close_sock(int s) {
     if (s >= 0) {
@@ -1309,6 +1331,62 @@ static int connect_target(const char *host, int port) {
     return target_sock;
 }
 
+static int connect_target_async(const char *host, int port, int *out_connecting) {
+    if (out_connecting) *out_connecting = 0;
+    char port_str[16];
+    snprintf(port_str, sizeof(port_str), "%d", port);
+
+    struct addrinfo hints;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET; // Prefer IPv4 to avoid 75-second IPv6 blackhole hangs
+    hints.ai_socktype = SOCK_STREAM;
+
+    struct addrinfo *res = NULL;
+    if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+        hints.ai_family = AF_UNSPEC;
+        if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) {
+            return -1;
+        }
+    }
+
+    int target_sock = -1;
+    for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
+        int s = (int)socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        if (s < 0) continue;
+#if defined(SO_NOSIGPIPE)
+        int opt = 1;
+        setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+#endif
+        set_sock_nonblocking(s);
+
+        int cr = connect((SOCKET)s, p->ai_addr, (int)p->ai_addrlen);
+        if (cr == 0) {
+            target_sock = s;
+            if (out_connecting) *out_connecting = 0;
+            break;
+        } else {
+#if defined(_WIN32)
+            int err = WSAGetLastError();
+            if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS) {
+                target_sock = s;
+                if (out_connecting) *out_connecting = 1;
+                break;
+            }
+#else
+            if (errno == EINPROGRESS || errno == EWOULDBLOCK) {
+                target_sock = s;
+                if (out_connecting) *out_connecting = 1;
+                break;
+            }
+#endif
+            close_sock(s);
+        }
+    }
+
+    freeaddrinfo(res);
+    return target_sock;
+}
+
 static uint8_t s_vpn_client_rx[131072];
 static int s_vpn_client_rx_len = 0;
 
@@ -1391,13 +1469,15 @@ void alya_vpn_ch_clear(void) {
 }
 
 // Client Direct Connections
-void alya_vpn_direct_set(int app_sock, int dest_sock) {
+void alya_vpn_direct_set_connecting(int app_sock, int dest_sock, int connecting) {
     set_sock_nonblocking(app_sock);
     set_sock_nonblocking(dest_sock);
     int free_slot = -1;
     for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
         if (s_client_directs[i].in_use && s_client_directs[i].app_sock == app_sock) {
             s_client_directs[i].dest_sock = dest_sock;
+            s_client_directs[i].connecting = connecting;
+            s_client_directs[i].connect_start_ms = get_time_ms();
             return;
         }
         if (!s_client_directs[i].in_use && free_slot < 0) free_slot = i;
@@ -1406,18 +1486,96 @@ void alya_vpn_direct_set(int app_sock, int dest_sock) {
         s_client_directs[free_slot].in_use = 1;
         s_client_directs[free_slot].app_sock = app_sock;
         s_client_directs[free_slot].dest_sock = dest_sock;
+        s_client_directs[free_slot].connecting = connecting;
+        s_client_directs[free_slot].connect_start_ms = get_time_ms();
     }
+}
+
+void alya_vpn_direct_set(int app_sock, int dest_sock) {
+    alya_vpn_direct_set_connecting(app_sock, dest_sock, 0);
 }
 
 int alya_vpn_pump_direct(void) {
     int activity = 0;
     static char buf[65536];
+    uint32_t now = get_time_ms();
 
     for (int i = 0; i < ALYA_MAX_CHANNELS; ++i) {
         if (!s_client_directs[i].in_use) continue;
         int a_sock = s_client_directs[i].app_sock;
         int d_sock = s_client_directs[i].dest_sock;
         if (a_sock < 0 || d_sock < 0) continue;
+
+        // Check if asynchronous connect is in progress
+        if (s_client_directs[i].connecting) {
+            if (now - s_client_directs[i].connect_start_ms > 4000) {
+                // Timeout after 4 seconds
+                close_sock(a_sock);
+                close_sock(d_sock);
+                s_client_directs[i].in_use = 0;
+                s_client_directs[i].app_sock = -1;
+                s_client_directs[i].dest_sock = -1;
+                continue;
+            }
+#if defined(_WIN32)
+            fd_set wfds, efds;
+            FD_ZERO(&wfds);
+            FD_ZERO(&efds);
+            FD_SET((SOCKET)d_sock, &wfds);
+            FD_SET((SOCKET)d_sock, &efds);
+            struct timeval tv = {0, 0};
+            int sel = select(0, NULL, &wfds, &efds, &tv);
+            if (sel > 0) {
+                if (FD_ISSET((SOCKET)d_sock, &efds)) {
+                    close_sock(a_sock);
+                    close_sock(d_sock);
+                    s_client_directs[i].in_use = 0;
+                    s_client_directs[i].app_sock = -1;
+                    s_client_directs[i].dest_sock = -1;
+                    continue;
+                }
+                if (FD_ISSET((SOCKET)d_sock, &wfds)) {
+                    s_client_directs[i].connecting = 0;
+                    activity = 1;
+                }
+            } else {
+                continue; // Still connecting
+            }
+#else
+            struct pollfd pfd;
+            pfd.fd = d_sock;
+            pfd.events = POLLOUT;
+            pfd.revents = 0;
+            int pr = poll(&pfd, 1, 0);
+            if (pr > 0) {
+                if (pfd.revents & (POLLERR | POLLHUP | POLLNVAL)) {
+                    close_sock(a_sock);
+                    close_sock(d_sock);
+                    s_client_directs[i].in_use = 0;
+                    s_client_directs[i].app_sock = -1;
+                    s_client_directs[i].dest_sock = -1;
+                    continue;
+                }
+                if (pfd.revents & POLLOUT) {
+                    int err = 0;
+                    socklen_t elen = sizeof(err);
+                    if (getsockopt(d_sock, SOL_SOCKET, SO_ERROR, &err, &elen) == 0 && err == 0) {
+                        s_client_directs[i].connecting = 0;
+                        activity = 1;
+                    } else {
+                        close_sock(a_sock);
+                        close_sock(d_sock);
+                        s_client_directs[i].in_use = 0;
+                        s_client_directs[i].app_sock = -1;
+                        s_client_directs[i].dest_sock = -1;
+                        continue;
+                    }
+                }
+            } else {
+                continue; // Still connecting
+            }
+#endif
+        }
 
         // 1. App -> Destination (uploading request / data / photos)
         int n1 = recv((SOCKET)a_sock, buf, sizeof(buf), 0);
@@ -1485,13 +1643,14 @@ int alya_vpn_pump_direct(void) {
 
 int alya_vpn_open_direct(int app_sock, const char *host, int port) {
     if (app_sock < 0 || !host || !host[0] || port <= 0) return -1;
-    int dest_sock = connect_target(host, port);
+    int connecting = 0;
+    int dest_sock = connect_target_async(host, port, &connecting);
     if (dest_sock < 0) {
         return -1;
     }
     set_sock_nonblocking(app_sock);
     set_sock_nonblocking(dest_sock);
-    alya_vpn_direct_set(app_sock, dest_sock);
+    alya_vpn_direct_set_connecting(app_sock, dest_sock, connecting);
     return dest_sock;
 }
 
@@ -2112,8 +2271,6 @@ static void macos_set_service_proxy(const char *service, int enable, int port) {
         system(cmd);
         snprintf(cmd, sizeof(cmd), "networksetup -setproxybypassdomains \"%s\" 127.0.0.1 localhost *.local 169.254/16 >/dev/null 2>&1", service);
         system(cmd);
-        snprintf(cmd, sizeof(cmd), "networksetup -setdnsservers \"%s\" 1.1.1.1 1.0.0.1 8.8.8.8 >/dev/null 2>&1", service);
-        system(cmd);
         system("dscacheutil -flushcache >/dev/null 2>&1");
     } else {
         snprintf(cmd, sizeof(cmd), "networksetup -setsocksfirewallproxystate \"%s\" off >/dev/null 2>&1", service);
@@ -2121,8 +2278,6 @@ static void macos_set_service_proxy(const char *service, int enable, int port) {
         snprintf(cmd, sizeof(cmd), "networksetup -setwebproxystate \"%s\" off >/dev/null 2>&1", service);
         system(cmd);
         snprintf(cmd, sizeof(cmd), "networksetup -setsecurewebproxystate \"%s\" off >/dev/null 2>&1", service);
-        system(cmd);
-        snprintf(cmd, sizeof(cmd), "networksetup -setdnsservers \"%s\" \"Empty\" >/dev/null 2>&1", service);
         system(cmd);
         system("dscacheutil -flushcache >/dev/null 2>&1");
     }

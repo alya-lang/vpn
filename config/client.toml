@@ -25,6 +25,8 @@ apps = [
     "discord",
     "Discord Helper",
     "discord helper",
+    "ShipIt",
+    "shipit",
     "mDNSResponder",
     "Chrome.exe",
     "Chrome",

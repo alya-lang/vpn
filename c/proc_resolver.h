@@ -79,6 +79,7 @@ void alya_vpn_ch_clear(void);
 
 // Client Direct Connection Table: app_sock -> dest_sock
 void alya_vpn_direct_set(int app_sock, int dest_sock);
+void alya_vpn_direct_set_connecting(int app_sock, int dest_sock, int connecting);
 int  alya_vpn_direct_get(int app_sock);
 void alya_vpn_direct_remove(int app_sock);
 int  alya_vpn_direct_count(void);
