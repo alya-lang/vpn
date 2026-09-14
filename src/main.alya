@@ -10,7 +10,7 @@ import "./common/protocol.alya" as proto
 
 function print_banner()
     say("=================================================================")
-    say("           A L Y A   V P N   T U N N E L   (v0.2.3)              ")
+    say("           A L Y A   V P N   T U N N E L   (v0.2.4)              ")
     say("   High-Performance ChaCha20-Poly1305 Split-Tunneling Network    ")
     say("=================================================================")
 end
@@ -31,10 +31,20 @@ function print_usage()
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
     say("    --mode <all|inc|exc>      Split-tunnel mode:")
     say("                                all: Route everything via VPN")
-    say("                                inc: ONLY listed apps use VPN")
-    say("                                exc: Listed apps BYPASS VPN (default)")
+    say("                                inc: ONLY listed apps/domains use VPN")
+    say("                                exc: Listed apps/domains BYPASS VPN (default)")
     say("    --apps <a,b,c>            Comma-separated app names or patterns")
     say("                              e.g. 'discord,steamwebhelper.exe,*torrent*'")
+    say("    --domains <d1,d2>         Comma-separated domain patterns (e.g. '*.discord.com')")
+    say("    --bypass-lan <bool>       Bypass private LAN targets (default: true)")
+    say("    --auto-reconnect <bool>   Auto reconnect on tunnel drops (default: true)")
+    say("    --reconnect-attempts <N>  Max reconnect attempts (default: 10, 0=infinite)")
+    say("    --reconnect-interval <ms> Delay between attempts in ms (default: 3000)")
+    say("    --handshake-timeout <ms>  SOCKS5 handshake timeout in ms (default: 3000)")
+    say("    --connect-timeout <ms>    Direct connect timeout in ms (default: 3000)")
+    say("    --tcp-nodelay <bool>      Disable Nagle algorithm for low latency (default: true)")
+    say("    --log-direct              Show direct bypass connections in log")
+    say("    --quiet-direct            Hide direct bypass connections from log (default)")
     say("    --crypto-threads <N>      Crypto worker thread count (default: 1)")
     say("    --io-threads <N>          I/O worker thread count (default: 2)")
     say("    --no-system-proxy         Do not configure system proxy automatically\n")
@@ -87,7 +97,17 @@ function load_client_config(config_path)
         "crypto_threads": 1,
         "io_threads": 2,
         "tunnel_dns": "true",
+        "bypass_lan": "true",
+        "auto_reconnect": "true",
+        "reconnect_attempts": 10,
+        "reconnect_interval_ms": 3000,
+        "handshake_timeout_ms": 3000,
+        "connect_timeout_ms": 3000,
+        "tcp_nodelay": "true",
+        "log_tunnel_traffic": "true",
+        "log_direct_traffic": "false",
         "apps": [],
+        "domains": [],
         "dns_servers": [],
         "dns_resolvers": []
     }
@@ -121,7 +141,25 @@ function load_client_config(config_path)
                 cfg["io_threads"] = proto::parse_number(strip_val(val))
             else if key == "tunnel_dns" or key == "route_dns"
                 cfg["tunnel_dns"] = strip_val(val)
-            else if key == "apps" or key == "dns_servers" or key == "dns_resolvers"
+            else if key == "bypass_lan" or key == "local_network_bypass"
+                cfg["bypass_lan"] = strip_val(val)
+            else if key == "auto_reconnect"
+                cfg["auto_reconnect"] = strip_val(val)
+            else if key == "reconnect_attempts" or key == "max_reconnect_attempts"
+                cfg["reconnect_attempts"] = proto::parse_number(strip_val(val))
+            else if key == "reconnect_interval_ms" or key == "reconnect_interval"
+                cfg["reconnect_interval_ms"] = proto::parse_number(strip_val(val))
+            else if key == "handshake_timeout_ms" or key == "handshake_timeout"
+                cfg["handshake_timeout_ms"] = proto::parse_number(strip_val(val))
+            else if key == "connect_timeout_ms" or key == "connect_timeout"
+                cfg["connect_timeout_ms"] = proto::parse_number(strip_val(val))
+            else if key == "tcp_nodelay" or key == "nodelay"
+                cfg["tcp_nodelay"] = strip_val(val)
+            else if key == "log_tunnel_traffic"
+                cfg["log_tunnel_traffic"] = strip_val(val)
+            else if key == "log_direct_traffic"
+                cfg["log_direct_traffic"] = strip_val(val)
+            else if key == "apps" or key == "domains" or key == "dns_servers" or key == "dns_resolvers"
                 current_array = key
                 let bracket_open = proto::find_char(val, "[")
                 let bracket_close = proto::find_char(val, "]")
@@ -277,13 +315,23 @@ function main()
         let proxy_port = 1080
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let split_mode = router::mode_exclude() # Default blacklist
-        let app_list = ["discord", "Discord.exe"]
+        let app_list = ["Speedtest", "Discord", "Chrome", "curl"]
+        let domain_list = []
         let auto_sys_proxy = 1
         let tunnel_dns = 1
         let crypto_threads = 1
         let io_threads = 2
         let dns_servers = []
         let dns_resolvers = []
+        let bypass_lan = 1
+        let auto_reconnect = 1
+        let reconnect_attempts = 10
+        let reconnect_interval_ms = 3000
+        let handshake_timeout_ms = 3000
+        let connect_timeout_ms = 3000
+        let tcp_nodelay = 1
+        let log_tunnel_traffic = 1
+        let log_direct_traffic = 0
 
         # 1. Automatically load config/client.toml if present
         let cfg_file = "config/client.toml"
@@ -309,8 +357,38 @@ function main()
             if file_cfg["tunnel_dns"] == "false" or file_cfg["tunnel_dns"] == "0"
                 tunnel_dns = 0
             end
+            if file_cfg["bypass_lan"] == "false" or file_cfg["bypass_lan"] == "0"
+                bypass_lan = 0
+            end
+            if file_cfg["auto_reconnect"] == "false" or file_cfg["auto_reconnect"] == "0"
+                auto_reconnect = 0
+            end
+            if file_cfg["tcp_nodelay"] == "false" or file_cfg["tcp_nodelay"] == "0"
+                tcp_nodelay = 0
+            end
+            if file_cfg["log_tunnel_traffic"] == "false" or file_cfg["log_tunnel_traffic"] == "0"
+                log_tunnel_traffic = 0
+            end
+            if file_cfg["log_direct_traffic"] == "true" or file_cfg["log_direct_traffic"] == "1"
+                log_direct_traffic = 1
+            end
+            if file_cfg["reconnect_attempts"] != null and file_cfg["reconnect_attempts"] >= 0
+                reconnect_attempts = file_cfg["reconnect_attempts"]
+            end
+            if file_cfg["reconnect_interval_ms"] != null and file_cfg["reconnect_interval_ms"] > 0
+                reconnect_interval_ms = file_cfg["reconnect_interval_ms"]
+            end
+            if file_cfg["handshake_timeout_ms"] != null and file_cfg["handshake_timeout_ms"] > 0
+                handshake_timeout_ms = file_cfg["handshake_timeout_ms"]
+            end
+            if file_cfg["connect_timeout_ms"] != null and file_cfg["connect_timeout_ms"] > 0
+                connect_timeout_ms = file_cfg["connect_timeout_ms"]
+            end
             if len(file_cfg["apps"]) > 0
                 app_list = file_cfg["apps"]
+            end
+            if len(file_cfg["domains"]) > 0
+                domain_list = file_cfg["domains"]
             end
             if len(file_cfg["dns_servers"]) > 0
                 dns_servers = file_cfg["dns_servers"]
@@ -345,8 +423,38 @@ function main()
                     if custom_cfg["tunnel_dns"] == "false" or custom_cfg["tunnel_dns"] == "0"
                         tunnel_dns = 0
                     end
+                    if custom_cfg["bypass_lan"] == "false" or custom_cfg["bypass_lan"] == "0"
+                        bypass_lan = 0
+                    end
+                    if custom_cfg["auto_reconnect"] == "false" or custom_cfg["auto_reconnect"] == "0"
+                        auto_reconnect = 0
+                    end
+                    if custom_cfg["tcp_nodelay"] == "false" or custom_cfg["tcp_nodelay"] == "0"
+                        tcp_nodelay = 0
+                    end
+                    if custom_cfg["log_tunnel_traffic"] == "false" or custom_cfg["log_tunnel_traffic"] == "0"
+                        log_tunnel_traffic = 0
+                    end
+                    if custom_cfg["log_direct_traffic"] == "true" or custom_cfg["log_direct_traffic"] == "1"
+                        log_direct_traffic = 1
+                    end
+                    if custom_cfg["reconnect_attempts"] != null and custom_cfg["reconnect_attempts"] >= 0
+                        reconnect_attempts = custom_cfg["reconnect_attempts"]
+                    end
+                    if custom_cfg["reconnect_interval_ms"] != null and custom_cfg["reconnect_interval_ms"] > 0
+                        reconnect_interval_ms = custom_cfg["reconnect_interval_ms"]
+                    end
+                    if custom_cfg["handshake_timeout_ms"] != null and custom_cfg["handshake_timeout_ms"] > 0
+                        handshake_timeout_ms = custom_cfg["handshake_timeout_ms"]
+                    end
+                    if custom_cfg["connect_timeout_ms"] != null and custom_cfg["connect_timeout_ms"] > 0
+                        connect_timeout_ms = custom_cfg["connect_timeout_ms"]
+                    end
                     if len(custom_cfg["apps"]) > 0
                         app_list = custom_cfg["apps"]
+                    end
+                    if len(custom_cfg["domains"]) > 0
+                        domain_list = custom_cfg["domains"]
                     end
                     if len(custom_cfg["dns_servers"]) > 0
                         dns_servers = custom_cfg["dns_servers"]
@@ -391,6 +499,67 @@ function main()
                 end
                 app_list = clean_apps
                 i += 2
+            else if args_list[i] == "--domains" and i + 1 < len(args_list)
+                let raw_dms = proto::split_string(args_list[i + 1], ",")
+                let clean_dms = []
+                let k = 0
+                while k < len(raw_dms)
+                    let it = strip_val(raw_dms[k])
+                    if len(it) > 0
+                        clean_dms.push(it)
+                    end
+                    k += 1
+                end
+                domain_list = clean_dms
+                i += 2
+            else if args_list[i] == "--bypass-lan" and i + 1 < len(args_list)
+                let bl = lower(args_list[i + 1])
+                if bl == "false" or bl == "0"
+                    bypass_lan = 0
+                else
+                    bypass_lan = 1
+                end
+                i += 2
+            else if args_list[i] == "--no-bypass-lan"
+                bypass_lan = 0
+                i += 1
+            else if args_list[i] == "--log-direct"
+                log_direct_traffic = 1
+                i += 1
+            else if args_list[i] == "--quiet-direct"
+                log_direct_traffic = 0
+                i += 1
+            else if args_list[i] == "--auto-reconnect" and i + 1 < len(args_list)
+                let ar = lower(args_list[i + 1])
+                if ar == "false" or ar == "0"
+                    auto_reconnect = 0
+                else
+                    auto_reconnect = 1
+                end
+                i += 2
+            else if args_list[i] == "--no-reconnect"
+                auto_reconnect = 0
+                i += 1
+            else if args_list[i] == "--reconnect-attempts" and i + 1 < len(args_list)
+                reconnect_attempts = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--reconnect-interval" and i + 1 < len(args_list)
+                reconnect_interval_ms = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--handshake-timeout" and i + 1 < len(args_list)
+                handshake_timeout_ms = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--connect-timeout" and i + 1 < len(args_list)
+                connect_timeout_ms = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--tcp-nodelay" and i + 1 < len(args_list)
+                let nd = lower(args_list[i + 1])
+                if nd == "false" or nd == "0"
+                    tcp_nodelay = 0
+                else
+                    tcp_nodelay = 1
+                end
+                i += 2
             else if args_list[i] == "--crypto-threads" and i + 1 < len(args_list)
                 crypto_threads = proto::parse_number(args_list[i + 1])
                 i += 2
@@ -423,7 +592,30 @@ function main()
             return 1
         end
         say("[INFO] Thread pool initialized: " + crypto_threads + " crypto workers, " + io_threads + " I/O workers")
-        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list, auto_sys_proxy, tunnel_dns, dns_servers, dns_resolvers)
+
+        let client_cfg = {
+            "local_port": proxy_port,
+            "server_host": srv_host,
+            "server_port": srv_port,
+            "passphrase": pass,
+            "split_mode": split_mode,
+            "apps": app_list,
+            "domains": domain_list,
+            "auto_sys_proxy": auto_sys_proxy,
+            "tunnel_dns": tunnel_dns,
+            "dns_servers": dns_servers,
+            "dns_resolvers": dns_resolvers,
+            "bypass_lan": bypass_lan,
+            "auto_reconnect": auto_reconnect,
+            "reconnect_attempts": reconnect_attempts,
+            "reconnect_interval_ms": reconnect_interval_ms,
+            "handshake_timeout_ms": handshake_timeout_ms,
+            "connect_timeout_ms": connect_timeout_ms,
+            "tcp_nodelay": tcp_nodelay,
+            "log_tunnel_traffic": log_tunnel_traffic,
+            "log_direct_traffic": log_direct_traffic
+        }
+        client::vpn_run_client_proxy(client_cfg)
         return 0
     end
 

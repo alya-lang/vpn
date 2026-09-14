@@ -26,6 +26,7 @@
 #include <time.h>
 #include <poll.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <netdb.h>
 #include <sched.h>
@@ -806,20 +807,49 @@ int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len
 
 #endif
 
+static int s_handshake_timeout_ms = 3000;
+static int s_connect_timeout_ms = 3000;
+static int s_tcp_nodelay = 1;
+
+void alya_vpn_set_timeouts(int handshake_ms, int connect_ms) {
+    if (handshake_ms > 0) s_handshake_timeout_ms = handshake_ms;
+    if (connect_ms > 0) s_connect_timeout_ms = connect_ms;
+}
+
+void alya_vpn_set_tcp_nodelay(int enable) {
+    s_tcp_nodelay = enable ? 1 : 0;
+}
+
+int alya_vpn_get_tcp_nodelay(void) {
+    return s_tcp_nodelay;
+}
+
+static void apply_socket_nodelay(int sock) {
+    if (!s_tcp_nodelay || sock < 0) return;
+    int opt = 1;
+    setsockopt((SOCKET)sock, IPPROTO_TCP, TCP_NODELAY, (const char *)&opt, sizeof(opt));
+}
+
+static void set_socket_timeout(int sock, int timeout_ms) {
+    if (sock < 0 || timeout_ms <= 0) return;
+#if defined(_WIN32)
+    DWORD tv = (DWORD)timeout_ms;
+    setsockopt((SOCKET)sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+    setsockopt((SOCKET)sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
+#else
+    struct timeval tv;
+    tv.tv_sec = timeout_ms / 1000;
+    tv.tv_usec = (timeout_ms % 1000) * 1000;
+    setsockopt((SOCKET)sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
+    setsockopt((SOCKET)sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
+#endif
+}
+
 int alya_vpn_socks5_handshake(int client_sock, char *out_host, int max_host_len) {
     if (!out_host || max_host_len < 16) return -1;
 
-#if defined(_WIN32)
-    DWORD tv = 3000;
-    setsockopt((SOCKET)client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
-    setsockopt((SOCKET)client_sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
-#else
-    struct timeval tv;
-    tv.tv_sec = 3;
-    tv.tv_usec = 0;
-    setsockopt((SOCKET)client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
-    setsockopt((SOCKET)client_sock, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
-#endif
+    apply_socket_nodelay(client_sock);
+    set_socket_timeout(client_sock, s_handshake_timeout_ms);
 
     // 1. Initial Greeting / Request peek
     unsigned char greet[1024];
@@ -1069,6 +1099,51 @@ void alya_vpn_add_dns_resolver(const char *resolver) {
     s_dns_resolver_count++;
 }
 
+static int s_bypass_lan = 1;
+static char s_split_domains[128][128];
+static int s_split_domain_count = 0;
+
+void alya_vpn_set_bypass_lan(int enable) {
+    s_bypass_lan = enable ? 1 : 0;
+}
+
+int alya_vpn_get_bypass_lan(void) {
+    return s_bypass_lan;
+}
+
+void alya_vpn_domain_clear(void) {
+    s_split_domain_count = 0;
+}
+
+void alya_vpn_add_routing_domain(const char *domain) {
+    if (!domain || !domain[0] || s_split_domain_count >= 128) return;
+    size_t len = strlen(domain);
+    if (len >= 128) return;
+    strncpy(s_split_domains[s_split_domain_count], domain, 127);
+    s_split_domains[s_split_domain_count][127] = '\0';
+    s_split_domain_count++;
+}
+
+static int is_lan_target(const char *host) {
+    if (!host || !host[0]) return 0;
+
+    size_t len = strlen(host);
+    if (len >= 6 && ALYA_STRICMP(host + len - 6, ".local") == 0) return 1;
+    if (len >= 4 && ALYA_STRICMP(host + len - 4, ".lan") == 0) return 1;
+    if (len >= 5 && ALYA_STRICMP(host + len - 5, ".home") == 0) return 1;
+    if (len >= 9 && ALYA_STRICMP(host + len - 9, ".internal") == 0) return 1;
+
+    // IPv4 private & link-local ranges
+    if (strncmp(host, "10.", 3) == 0) return 1;
+    if (strncmp(host, "192.168.", 8) == 0) return 1;
+    if (strncmp(host, "169.254.", 8) == 0) return 1;
+    if (strncmp(host, "172.", 4) == 0) {
+        int sec = atoi(host + 4);
+        if (sec >= 16 && sec <= 31) return 1;
+    }
+    return 0;
+}
+
 static int pattern_match_c(const char *pattern, const char *text) {
     if (!pattern || !text || !pattern[0] || !text[0]) return 0;
 
@@ -1242,6 +1317,11 @@ int alya_vpn_should_route_host(const char *host, int port) {
         return 0;
     }
 
+    // 1b. LAN targets (192.168.x, 10.x, 172.16-31.x, .local) bypass VPN if enabled
+    if (s_bypass_lan && is_lan_target(host)) {
+        return 0;
+    }
+
     // 2. DNS queries route via VPN if tunnel_dns is enabled
     if (s_tunnel_dns) {
         if (port == 53 || port == 853) {
@@ -1258,6 +1338,15 @@ int alya_vpn_should_route_host(const char *host, int port) {
                 if (pattern_match_c(s_default_dns_servers[i], host)) {
                     return 1;
                 }
+            }
+        }
+    }
+
+    // 2b. Match host against explicitly configured routing domains (*.domain.com, etc.)
+    if (s_split_domain_count > 0) {
+        for (int i = 0; i < s_split_domain_count; ++i) {
+            if (pattern_match_c(s_split_domains[i], host)) {
+                return (s_split_mode == 2) ? 0 : 1;
             }
         }
     }
@@ -1473,17 +1562,8 @@ static int connect_target(const char *host, int port) {
         int opt = 1;
         setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
 #endif
-#if defined(_WIN32)
-        DWORD tv = 3000;
-        setsockopt((SOCKET)s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
-        setsockopt((SOCKET)s, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
-#else
-        struct timeval tv;
-        tv.tv_sec = 3;
-        tv.tv_usec = 0;
-        setsockopt((SOCKET)s, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv, sizeof(tv));
-        setsockopt((SOCKET)s, SOL_SOCKET, SO_SNDTIMEO, (const char *)&tv, sizeof(tv));
-#endif
+        apply_socket_nodelay(s);
+        set_socket_timeout(s, s_connect_timeout_ms);
 
         if (connect((SOCKET)s, p->ai_addr, (int)p->ai_addrlen) == 0) {
             target_sock = s;
@@ -1523,6 +1603,7 @@ static int connect_target_async(const char *host, int port, int *out_connecting)
         setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
 #endif
         set_sock_nonblocking(s);
+        apply_socket_nodelay(s);
 
         int cr = connect((SOCKET)s, p->ai_addr, (int)p->ai_addrlen);
         if (cr == 0) {
@@ -1963,6 +2044,8 @@ int alya_vpn_open_client_channel(int vpn_sock, int channel_id, const char *host,
     }
     set_sock_nonblocking(app_sock);
     set_sock_nonblocking(vpn_sock);
+    apply_socket_nodelay(app_sock);
+    apply_socket_nodelay(vpn_sock);
     alya_vpn_ch_set(channel_id, app_sock);
 
     char target[512];

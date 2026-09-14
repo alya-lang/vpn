@@ -8,6 +8,28 @@ protocol = "tcp"
 crypto_threads = 1
 io_threads = 2
 
+[connection]
+# Automatically reconnect if VPN server connection drops
+auto_reconnect = true
+# Maximum reconnect attempts before giving up (0 = retry indefinitely)
+reconnect_attempts = 10
+# Delay between reconnect attempts in milliseconds
+reconnect_interval_ms = 3000
+# SOCKS5 handshake timeout in milliseconds
+handshake_timeout_ms = 3000
+# Direct connection timeout in milliseconds
+connect_timeout_ms = 3000
+
+[performance]
+# Enable TCP_NODELAY (disables Nagle algorithm for lower latency in gaming and voice chat)
+tcp_nodelay = true
+
+[logging]
+# Show connections tunneled through the VPN in the console
+log_tunnel_traffic = true
+# Show direct local bypass connections in the console (set to false to reduce console clutter)
+log_direct_traffic = false
+
 [dns]
 # DNS Protection & Routing:
 #   true  - Route DNS queries through encrypted VPN tunnel to prevent ISP tampering/censorship (default).
@@ -25,8 +47,7 @@ tunnel_dns = true
 # Control D (76.76.2.0, 76.76.10.0)
 dns_servers = [
     # "1.1.1.1",
-    # "8.8.8.8",
-    # "9.9.9.9"
+    # "8.8.8.8"
 ]
 
 # System DNS resolver process names to tunnel.
@@ -40,18 +61,26 @@ dns_resolvers = [
 [split_tunnel]
 # Modes:
 #   "all"     - Route all network traffic through the encrypted VPN tunnel.
-#   "include" - (Whitelist) Only specified applications route through VPN; all others use direct local internet.
-#   "exclude" - (Blacklist) Specified applications bypass VPN (direct internet); all other apps route through VPN.
+#   "include" - (Whitelist) Only specified applications/domains route through VPN; all others use direct local internet.
+#   "exclude" - (Blacklist) Specified applications/domains bypass VPN (direct internet); all other apps route through VPN.
 mode = "include"
+
+# Bypass local LAN traffic (192.168.x.x, 10.x.x.x, 172.16-31.x.x, .local) even in "all" mode
+bypass_lan = true
+
+# Target applications to route/bypass (process name or pattern, case-insensitive, .exe optional)
 apps = [
-    "Discord.exe",
-    "discord.exe",
+    "Speedtest",
     "Discord",
-    "discord",
     "Discord Helper",
-    "discord helper",
     "ShipIt",
-    "shipit",
-    "curl.exe",
+    "Chrome",
     "curl"
+]
+
+# Target domains or wildcards to route/bypass (e.g. "*.discord.com", "api.github.com")
+domains = [
+    # "*.discord.com",
+    # "*.discordapp.com",
+    # "*.discord.gg"
 ]

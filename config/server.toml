@@ -5,3 +5,7 @@ passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
 crypto_threads = 2
 io_threads = 4
+
+[performance]
+# Low-latency TCP optimization (disables Nagle algorithm)
+tcp_nodelay = true

@@ -42,6 +42,13 @@ extern "C"
     function alya_vpn_dns_clear() -> void
     function alya_vpn_add_dns_server(server: str) -> void
     function alya_vpn_add_dns_resolver(resolver: str) -> void
+    function alya_vpn_set_bypass_lan(enable: i32) -> void
+    function alya_vpn_get_bypass_lan() -> i32
+    function alya_vpn_domain_clear() -> void
+    function alya_vpn_add_routing_domain(domain: str) -> void
+    function alya_vpn_set_timeouts(handshake_ms: i32, connect_ms: i32) -> void
+    function alya_vpn_set_tcp_nodelay(enable: i32) -> void
+    function alya_vpn_get_tcp_nodelay() -> i32
 
     # Client Channel Table (O(1), zero Alya allocations)
     function alya_vpn_ch_set(channel_id: i32, app_sock: i32) -> void

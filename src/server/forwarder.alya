@@ -19,6 +19,7 @@ function vpn_run_server(listen_port, passphrase, client_thread_handler, crypto_t
     say("[INFO] Thread pool initialized: " + crypto_threads + " crypto workers, " + io_threads + " I/O workers")
 
     alya_vpn_set_session_passphrase(passphrase)
+    alya_vpn_set_tcp_nodelay(1)
     let key = crypto::vpn_derive_key(passphrase)
     let server_sock = net::tcp_listen(listen_port, 32)
     if server_sock < 0

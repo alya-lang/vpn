@@ -67,6 +67,19 @@ void alya_vpn_dns_clear(void);
 void alya_vpn_add_dns_server(const char *server);
 void alya_vpn_add_dns_resolver(const char *resolver);
 
+// LAN Bypass configuration (192.168.x, 10.x, 172.16-31.x, .local)
+void alya_vpn_set_bypass_lan(int enable);
+int  alya_vpn_get_bypass_lan(void);
+
+// Domain routing rules (*.example.com, etc.)
+void alya_vpn_domain_clear(void);
+void alya_vpn_add_routing_domain(const char *domain);
+
+// Socket timeouts & low-latency TCP_NODELAY optimization
+void alya_vpn_set_timeouts(int handshake_ms, int connect_ms);
+void alya_vpn_set_tcp_nodelay(int enable);
+int  alya_vpn_get_tcp_nodelay(void);
+
 // Cross-platform idle sleep (ms). Use in event loops when no activity detected.
 void alya_vpn_sleep_ms(int ms);
 
