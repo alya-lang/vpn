@@ -44,10 +44,6 @@ dns_resolvers = [
 #   "exclude" - (Blacklist) Specified applications bypass VPN (direct internet); all other apps route through VPN.
 mode = "include"
 apps = [
-    "Speedtest.exe",
-    "speedtest.exe",
-    "Speedtest",
-    "speedtest",
     "Discord.exe",
     "discord.exe",
     "Discord",
@@ -56,11 +52,6 @@ apps = [
     "discord helper",
     "ShipIt",
     "shipit",
-    "mDNSResponder",
-    "Chrome.exe",
-    "Chrome",
-    "chrome.exe",
-    "chrome",
     "curl.exe",
     "curl"
 ]
