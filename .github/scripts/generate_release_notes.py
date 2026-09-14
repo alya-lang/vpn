@@ -96,7 +96,7 @@ def main():
             tag = run_git(["describe", "--tags", "--abbrev=0"], check=False)
 
     if not tag:
-        tag = "v0.2.6"
+        tag = "v0.2.7"
 
     # 2. Resolve Repository Slug (e.g. alya-lang/vpn)
     repo = os.environ.get("GITHUB_REPOSITORY", "")
