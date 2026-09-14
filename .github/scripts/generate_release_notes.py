@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
 generate_release_notes.py
-Standardized release notes generator for Alya language packages.
+Standardized release notes generator for Alya VPN (alya-lang/vpn).
 
 Responsibilities:
-1. Extract package metadata from alya.toml (name, description, version, etc.).
-2. Resolve current tag and determine previous tag in git history.
-3. Generate commit changelog between releases.
-4. Construct compare/commits links for full changelog tracking.
+1. Resolve release tag and previous tag in git history.
+2. Generate commit changelog between releases (What's Changed).
+3. Construct compare/commits links for full changelog tracking.
+4. Read SHA-256 checksums from dist/ or artifacts/.
 5. Populate .github/release_template.md placeholders and output RELEASE_NOTES.md.
 6. Export outputs (tag, title, prev_tag, etc.) to $GITHUB_OUTPUT.
 """
 
+import hashlib
 import os
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 # Ensure UTF-8 output on all platforms (especially Windows CP1254/CP1252)
@@ -40,28 +41,29 @@ def run_git(args, check=True):
         return ""
 
 
-def parse_simple_toml(file_path):
-    """Parse top-level [package] key-value pairs from alya.toml."""
-    props = {}
-    path = Path(file_path)
-    if not path.is_file():
-        return props
+def get_checksum(dist_dir, pkg_name):
+    """Extract SHA-256 hash from .sha256 file if present, or compute directly."""
+    sha_file = dist_dir / f"{pkg_name}.sha256"
+    if sha_file.is_file():
+        try:
+            content = sha_file.read_text(encoding="utf-8").strip()
+            if content:
+                return content.split()[0]
+        except Exception:
+            pass
 
-    current_section = ""
-    with open(path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if line.startswith("[") and line.endswith("]"):
-                current_section = line[1:-1].strip()
-                continue
-            if current_section == "package" and "=" in line:
-                key, val = line.split("=", 1)
-                key = key.strip()
-                val = val.strip().strip('"').strip("'")
-                props[key] = val
-    return props
+    archive_file = dist_dir / pkg_name
+    if archive_file.is_file():
+        try:
+            h = hashlib.sha256()
+            with open(archive_file, "rb") as f:
+                while chunk := f.read(65536):
+                    h.update(chunk)
+            return h.hexdigest()
+        except Exception:
+            pass
+
+    return "—"
 
 
 def format_author(name, email):
@@ -89,62 +91,42 @@ def main():
     elif os.environ.get("INPUT_TAG"):
         tag = os.environ.get("INPUT_TAG").strip()
     else:
-        # Fallback to exact tag on HEAD or latest tag
         tag = run_git(["describe", "--tags", "--exact-match"], check=False)
         if not tag:
             tag = run_git(["describe", "--tags", "--abbrev=0"], check=False)
 
     if not tag:
-        tag = "v0.1.0"
+        tag = "v0.2.6"
 
-    version = tag.lstrip("v")
-
-    # 2. Extract Package Metadata from alya.toml
-    pkg_meta = parse_simple_toml("alya.toml")
-    pkg_name = pkg_meta.get("name")
-    if not pkg_name:
-        repo_env = os.environ.get("GITHUB_REPOSITORY", "")
-        if "/" in repo_env:
-            pkg_name = repo_env.split("/")[-1]
-        else:
-            pkg_name = Path.cwd().name
-
-    description = pkg_meta.get("description", "A modern package for the Alya programming language")
-    alya_version = pkg_meta.get("alya-version", "0.0.5")
-
-    # Resolve Repository Slug (e.g. alya-lang/toml)
+    # 2. Resolve Repository Slug (e.g. alya-lang/vpn)
     repo = os.environ.get("GITHUB_REPOSITORY", "")
     if not repo:
-        repo_url = pkg_meta.get("repository", "")
-        if "github.com/" in repo_url:
-            repo = repo_url.split("github.com/")[-1].strip("/")
-            if repo.endswith(".git"):
-                repo = repo[:-4]
+        origin_url = run_git(["config", "--get", "remote.origin.url"], check=False)
+        if "github.com" in origin_url:
+            cleaned = origin_url.split("github.com")[-1].lstrip(":").lstrip("/")
+            if cleaned.endswith(".git"):
+                cleaned = cleaned[:-4]
+            repo = cleaned
     if not repo:
-        repo = f"alya-lang/{pkg_name}"
+        repo = "alya-lang/vpn"
 
     repo_url = f"https://github.com/{repo}"
 
-    # 3. Release Title: Library Name + Version (e.g. "toml v0.1.0")
+    # 3. Release Title: "Alya VPN <version>" (e.g. "Alya VPN v0.2.6")
     title_version = tag if tag.startswith("v") else f"v{tag}"
-    title = f"{pkg_name} {title_version}"
+    title = f"Alya VPN {title_version}"
 
     # 4. Detect Previous Tag in Git History
-    # Check whether the target tag already exists as a git object (e.g. tag push).
-    # On manual workflow_dispatch triggers, the tag has not been created in git yet,
-    # so we compare against HEAD.
     tag_rev = run_git(["rev-parse", "--verify", f"refs/tags/{tag}"], check=False)
     tag_exists = bool(tag_rev)
     target_ref = tag if tag_exists else "HEAD"
 
     prev_tag = ""
-    # If the tag already exists, look before it (tag^). Otherwise, look at HEAD.
     base_ref = f"{tag}^" if tag_exists else target_ref
     describe_prev = run_git(["describe", "--tags", "--abbrev=0", base_ref], check=False)
     if describe_prev and describe_prev != tag:
         prev_tag = describe_prev
     else:
-        # Fallback: check all version tags sorted descending
         all_tags_raw = run_git(["tag", "-l", "v*", "--sort=-v:refname"], check=False)
         if all_tags_raw:
             all_tags = [t.strip() for t in all_tags_raw.splitlines() if t.strip() and t.strip() != tag]
@@ -187,6 +169,7 @@ def main():
                 subject.startswith(f"release {tag}")
                 or subject.startswith(f"chore: release {tag}")
                 or subject.startswith(f"chore(release): {tag}")
+                or "update benchmark results [skip ci]" in subject
             ):
                 continue
 
@@ -197,43 +180,71 @@ def main():
     else:
         commits_text = "* Initial release"
 
-    # 7. Load Template or Use Built-in Default
+    # 7. Checksums from dist/ or artifacts/
+    dist_dir = Path("dist")
+    if not dist_dir.is_dir():
+        if Path("artifacts").is_dir():
+            dist_dir = Path("artifacts")
+        else:
+            dist_dir = Path(".")
+
+    linux_pkg = f"alya-vpn-{tag}-x86_64-linux.tar.gz"
+    mac_arm_pkg = f"alya-vpn-{tag}-arm64-macos.tar.gz"
+    mac_x64_pkg = f"alya-vpn-{tag}-x86_64-macos.tar.gz"
+    win_pkg = f"alya-vpn-{tag}-x86_64-windows.zip"
+
+    linux_sha = get_checksum(dist_dir, linux_pkg)
+    mac_arm_sha = get_checksum(dist_dir, mac_arm_pkg)
+    mac_x64_sha = get_checksum(dist_dir, mac_x64_pkg)
+    win_sha = get_checksum(dist_dir, win_pkg)
+
+    linux_sha_short = linux_sha[:8] if linux_sha != "—" else "—"
+    mac_arm_sha_short = mac_arm_sha[:8] if mac_arm_sha != "—" else "—"
+    mac_x64_sha_short = mac_x64_sha[:8] if mac_x64_sha != "—" else "—"
+    win_sha_short = win_sha[:8] if win_sha != "—" else "—"
+
+    # 8. Load Template
     template_path = Path(".github/release_template.md")
     if template_path.is_file():
         template = template_path.read_text(encoding="utf-8")
     else:
         template = (
-            "{{DESCRIPTION}}\n\n"
-            "## 📦 Installation\n\n"
-            "Using the Alya CLI:\n\n"
-            "```bash\n"
-            "alyac add {{PACKAGE_NAME}} --git https://github.com/{{REPOSITORY}} --tag {{TAG}}\n"
-            "alyac install\n"
-            "```\n\n"
-            "Or add it directly to your project's `alya.toml`:\n\n"
-            "```toml\n"
-            "[dependencies]\n"
-            '{{PACKAGE_NAME}} = { git = "https://github.com/{{REPOSITORY}}", tag = "{{TAG}}" }\n'
-            "```\n\n"
+            "Alya VPN is a high-performance, secure, per-application split-tunneling VPN client & server "
+            "built with the Alya Programming Language.\n\n"
             "## 🚀 What's Changed\n\n"
             "{{CHANGELOG_COMMITS}}\n\n"
-            "## 🔗 Resources\n\n"
-            "- **Documentation**: [README.md](https://github.com/{{REPOSITORY}}#readme)\n"
-            "- **Examples**: [examples/](https://github.com/{{REPOSITORY}}/tree/{{TAG}}/examples)\n"
-            "- **Issue Tracker**: [GitHub Issues](https://github.com/{{REPOSITORY}}/issues)\n\n"
+            "## 📦 Pre-built Binaries\n\n"
+            "| Platform | Architecture | Package | Checksum |\n"
+            "|:---|:---|:---|:---:|\n"
+            f"| Linux | `x86_64` | [{linux_pkg}]({repo_url}/releases/download/{{VERSION}}/{linux_pkg}) | [{{{{LINUX_SHA_SHORT}}}}]({repo_url}/releases/download/{{VERSION}}/{linux_pkg}.sha256) |\n"
+            f"| macOS | `arm64` (Apple Silicon) | [{mac_arm_pkg}]({repo_url}/releases/download/{{VERSION}}/{mac_arm_pkg}) | [{{{{MAC_ARM_SHA_SHORT}}}}]({repo_url}/releases/download/{{VERSION}}/{mac_arm_pkg}.sha256) |\n"
+            f"| macOS | `x86_64` (Intel) | [{mac_x64_pkg}]({repo_url}/releases/download/{{VERSION}}/{mac_x64_pkg}) | [{{{{MAC_X64_SHA_SHORT}}}}]({repo_url}/releases/download/{{VERSION}}/{mac_x64_pkg}.sha256) |\n"
+            f"| Windows | `x86_64` | [{win_pkg}]({repo_url}/releases/download/{{VERSION}}/{win_pkg}) | [{{{{WIN_SHA_SHORT}}}}]({repo_url}/releases/download/{{VERSION}}/{win_pkg}.sha256) |\n\n"
+            "### 🔒 SHA-256 Checksums\n\n"
+            "```text\n"
+            f"{{{{LINUX_SHA}}}}  {linux_pkg}\n"
+            f"{{{{MAC_ARM_SHA}}}}  {mac_arm_pkg}\n"
+            f"{{{{MAC_X64_SHA}}}}  {mac_x64_pkg}\n"
+            f"{{{{WIN_SHA}}}}  {win_pkg}\n"
+            "```\n\n"
             "---\n\n"
             "{{FULL_CHANGELOG}}\n"
         )
 
-    # 8. Substitute Placeholders
+    # 9. Substitute Placeholders
     replacements = {
-        "{{PACKAGE_NAME}}": pkg_name,
-        "{{TAG}}": tag,
-        "{{VERSION}}": version,
-        "{{DESCRIPTION}}": description,
-        "{{REPOSITORY}}": repo,
+        "{{VERSION}}": tag,
+        "{{RAW_VERSION}}": tag.lstrip("v"),
+        "{{REPO}}": repo,
         "{{REPO_URL}}": repo_url,
-        "{{MIN_ALYA_VERSION}}": alya_version,
+        "{{LINUX_SHA}}": linux_sha,
+        "{{MAC_ARM_SHA}}": mac_arm_sha,
+        "{{MAC_X64_SHA}}": mac_x64_sha,
+        "{{WIN_SHA}}": win_sha,
+        "{{LINUX_SHA_SHORT}}": linux_sha_short,
+        "{{MAC_ARM_SHA_SHORT}}": mac_arm_sha_short,
+        "{{MAC_X64_SHA_SHORT}}": mac_x64_sha_short,
+        "{{WIN_SHA_SHORT}}": win_sha_short,
         "{{PREV_TAG}}": prev_tag,
         "{{CHANGELOG_COMMITS}}": commits_text,
         "{{FULL_CHANGELOG}}": full_changelog,
@@ -244,7 +255,7 @@ def main():
     for placeholder, val in replacements.items():
         body = body.replace(placeholder, val)
 
-    # 9. Output to File
+    # 10. Output to File
     out_file = Path("RELEASE_NOTES.md")
     out_file.write_text(body, encoding="utf-8")
     print(f"Generated release notes in {out_file.resolve()}")
@@ -253,15 +264,13 @@ def main():
     print(f"  Prev Tag:  {prev_tag or '(None - Initial Release)'}")
     print(f"  Changelog: {full_changelog_url}")
 
-    # 10. Export to GITHUB_OUTPUT if present
+    # 11. Export to GITHUB_OUTPUT if present
     github_output = os.environ.get("GITHUB_OUTPUT")
     if github_output:
         with open(github_output, "a", encoding="utf-8") as f:
             f.write(f"tag={tag}\n")
             f.write(f"title={title}\n")
             f.write(f"prev_tag={prev_tag}\n")
-            f.write(f"pkg_name={pkg_name}\n")
-            f.write(f"version={version}\n")
             f.write(f"changelog_url={full_changelog_url}\n")
 
 

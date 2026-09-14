@@ -7,61 +7,66 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.1.0)'
+        description: 'Release tag (e.g. v0.2.6)'
         required: true
-        default: 'v0.1.0'
+        default: 'v0.2.6'
+      prerelease:
+        description: 'Mark as prerelease'
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   build:
-    name: Build (${{ matrix.target.os-name }})
+    name: Build (${{ matrix.target.platform }})
     runs-on: ${{ matrix.target.runner }}
     strategy:
       fail-fast: false
       matrix:
         target:
           - runner: ubuntu-latest
-            os-name: linux-x64
+            platform: x86_64-linux
             binary: alya-vpn
-            archive: alya-vpn-linux-x64.tar.gz
+            archive: tar.gz
+          - runner: macos-latest
+            platform: arm64-macos
+            binary: alya-vpn
+            archive: tar.gz
+          - runner: macos-latest
+            platform: x86_64-macos
+            binary: alya-vpn
+            archive: tar.gz
           - runner: windows-latest
-            os-name: windows-x64
+            platform: x86_64-windows
             binary: alya-vpn.exe
-            archive: alya-vpn-windows-x64.zip
-          - runner: macos-latest
-            os-name: macos-arm64
-            binary: alya-vpn
-            archive: alya-vpn-macos-arm64.tar.gz
-          - runner: macos-latest
-            os-name: macos-x64
-            binary: alya-vpn
-            archive: alya-vpn-macos-x64.tar.gz
+            archive: zip
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Alya Compiler (Standard)
-        if: matrix.target.os-name != 'macos-x64'
+        if: matrix.target.platform != 'x86_64-macos'
         uses: alya-lang/setup-alya@v1
         with:
           version: 'latest'
 
       - name: Set up Alya Compiler (macOS x86_64 via Rosetta)
-        if: matrix.target.os-name == 'macos-x64'
+        if: matrix.target.platform == 'x86_64-macos'
         run: |
-          curl -sSL -o alyac-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.14/alyac-v0.0.14-x86_64-macos.tar.gz
+          curl -sSL -o alyac-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.15/alyac-v0.0.15-x86_64-macos.tar.gz || curl -sSL -o alyac-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.14/alyac-v0.0.14-x86_64-macos.tar.gz
           tar -xzf alyac-x64.tar.gz
-          sudo cp alyac-v0.0.14-x86_64-macos/alyac /usr/local/bin/alyac
+          sudo cp alyac-*/alyac /usr/local/bin/alyac
           sudo chmod +x /usr/local/bin/alyac
-          rm -rf alyac-x64.tar.gz alyac-v0.0.14-x86_64-macos
+          rm -rf alyac-x64.tar.gz alyac-*
 
       - name: Verify alyac installation (Unix)
         if: runner.os != 'Windows'
         run: |
-          if [ "${{ matrix.target.os-name }}" = "macos-x64" ]; then
+          if [ "${{ matrix.target.platform }}" = "x86_64-macos" ]; then
             arch -x86_64 alyac --version
           else
             alyac --version
@@ -75,7 +80,7 @@ jobs:
       - name: Build binary (Unix)
         if: runner.os != 'Windows'
         run: |
-          if [ "${{ matrix.target.os-name }}" = "macos-x64" ]; then
+          if [ "${{ matrix.target.platform }}" = "x86_64-macos" ]; then
             arch -x86_64 alyac src/main.alya -S -o main.s
             clang -arch x86_64 -O2 -std=c11 -Ic -c c/crypto.c -o crypto.o
             clang -arch x86_64 -O2 -std=c11 -Ic -c c/proc_resolver.c -o proc_resolver.o
@@ -94,33 +99,41 @@ jobs:
         run: |
           alyac build -o ${{ matrix.target.binary }}
 
+      - name: Package artifacts (Unix)
+        if: matrix.target.archive == 'tar.gz'
+        shell: bash
+        run: |
+          VERSION="${{ github.ref_type == 'tag' && github.ref_name || inputs.tag }}"
+          PACKAGE_NAME="alya-vpn-${VERSION}-${{ matrix.target.platform }}"
+          mkdir -p "${PACKAGE_NAME}/config"
+          cp "${{ matrix.target.binary }}" "${PACKAGE_NAME}/"
+          chmod +x "${PACKAGE_NAME}/${{ matrix.target.binary }}"
+          cp config/*.toml "${PACKAGE_NAME}/config/"
+          cp README.md LICENSE "${PACKAGE_NAME}/" 2>/dev/null || true
+          tar -czvf "${PACKAGE_NAME}.tar.gz" "${PACKAGE_NAME}"
+          shasum -a 256 "${PACKAGE_NAME}.tar.gz" > "${PACKAGE_NAME}.tar.gz.sha256"
+
       - name: Package artifacts (Windows)
-        if: runner.os == 'Windows'
+        if: matrix.target.archive == 'zip'
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path dist/config
-          Copy-Item ${{ matrix.target.binary }} dist/
-          Copy-Item config/*.toml dist/config/
-          if (Test-Path README.md) { Copy-Item README.md dist/ }
-          if (Test-Path LICENSE) { Copy-Item LICENSE dist/ }
-          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.target.archive }}
+          $Version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}" } else { "${{ inputs.tag }}" }
+          $PackageName = "alya-vpn-$Version-${{ matrix.target.platform }}"
+          New-Item -ItemType Directory -Force -Path "$PackageName/config" | Out-Null
+          Copy-Item "${{ matrix.target.binary }}" -Destination $PackageName
+          Copy-Item "config/*.toml" -Destination "$PackageName/config"
+          if (Test-Path README.md) { Copy-Item README.md -Destination $PackageName }
+          if (Test-Path LICENSE) { Copy-Item LICENSE -Destination $PackageName }
+          Compress-Archive -Path $PackageName -DestinationPath "$PackageName.zip"
+          $hash = (Get-FileHash -Algorithm SHA256 "$PackageName.zip").Hash.ToLower()
+          "$hash  $PackageName.zip" | Out-File -FilePath "$PackageName.zip.sha256" -Encoding ascii
 
-      - name: Package artifacts (Unix)
-        if: runner.os != 'Windows'
-        run: |
-          mkdir -p dist/config
-          cp ${{ matrix.target.binary }} dist/
-          chmod +x dist/${{ matrix.target.binary }}
-          cp config/*.toml dist/config/
-          cp README.md dist/ 2>/dev/null || true
-          cp LICENSE dist/ 2>/dev/null || true
-          tar -czvf ${{ matrix.target.archive }} -C dist .
-
-      - name: Upload artifact
+      - name: Upload Build Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.target.os-name }}
-          path: ${{ matrix.target.archive }}
+          name: release-${{ matrix.target.platform }}
+          path: |
+            alya-vpn-*-${{ matrix.target.platform }}.*
           if-no-files-found: error
 
   release:
@@ -141,12 +154,13 @@ jobs:
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          pattern: release-*
           merge-multiple: true
+          path: dist
 
       - name: List downloaded artifacts
         run: |
-          ls -la artifacts/
+          ls -la dist/
 
       - name: Generate Release Notes
         id: notes
@@ -157,9 +171,9 @@ jobs:
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.notes.outputs.tag }}
           name: ${{ steps.notes.outputs.title }}
+          tag_name: ${{ steps.notes.outputs.tag }}
           body_path: RELEASE_NOTES.md
-          files: artifacts/*
+          files: dist/*
           draft: false
-          prerelease: false
+          prerelease: ${{ inputs.prerelease == true || (inputs.prerelease != false && contains(steps.notes.outputs.tag, '-')) }}
