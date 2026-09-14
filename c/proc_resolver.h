@@ -60,6 +60,7 @@ int alya_vpn_should_route(const char *proc_name);
 // Checks if a destination host/port matches configured routing rules or requires VPN (e.g. DNS).
 // Returns 1 (route via VPN), 0 (bypass VPN / direct), or -1 (no host rule, use process routing).
 int alya_vpn_should_route_host(const char *host, int port);
+int alya_vpn_infer_process_from_host(const char *host, char *out_proc_name, int max_len);
 
 // Cross-platform idle sleep (ms). Use in event loops when no activity detected.
 void alya_vpn_sleep_ms(int ms);

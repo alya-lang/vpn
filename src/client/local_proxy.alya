@@ -120,6 +120,18 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
 
                 let ok, host, port = parse_socks5_request(app_sock)
                 if ok == 1
+                    # If process name couldn't be resolved from socket table, infer it from destination host
+                    if proc_name == "unknown"
+                        let inf_buf = "" + crypto::alloc_str(260)
+                        let inf_res = alya_vpn_infer_process_from_host(host, inf_buf, 256)
+                        if inf_res == 1
+                            let inf_name = resolver::extract_c_string(inf_buf)
+                            if len(inf_name) > 0
+                                proc_name = inf_name
+                            end
+                        end
+                    end
+
                     # Local loopback connections (e.g. Discord RPC 127.0.0.1:6463) must never be tunneled
                     if host == "127.0.0.1" or host == "localhost" or host == "::1"
                         route_vpn = 0

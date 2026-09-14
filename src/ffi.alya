@@ -36,6 +36,7 @@ extern "C"
     function alya_vpn_check_peer_route(proxy_local_port: i32, peer_remote_port: i32, out_proc_name: ptr, max_len: i32) -> i32
     function alya_vpn_should_route(proc_name: str) -> i32
     function alya_vpn_should_route_host(host: str, port: i32) -> i32
+    function alya_vpn_infer_process_from_host(host: str, out_name: ptr, max_len: i32) -> i32
 
     # Client Channel Table (O(1), zero Alya allocations)
     function alya_vpn_ch_set(channel_id: i32, app_sock: i32) -> void

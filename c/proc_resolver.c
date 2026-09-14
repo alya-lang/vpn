@@ -636,9 +636,10 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
     }
 
     int found = 0;
+    pid_t my_pid = getpid();
     for (int i = 0; i < num_pids && !found; ++i) {
         pid_t pid = pids[i];
-        if (pid <= 0) continue;
+        if (pid <= 0 || pid == my_pid) continue;
 
         int buf_size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
         if (buf_size <= 0) continue;
@@ -661,12 +662,19 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
         for (int j = 0; j < count; ++j) {
             if (fds[j].proc_fdtype == PROX_FDTYPE_SOCKET) {
                 struct socket_fdinfo si;
+                memset(&si, 0, sizeof(si));
                 int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
-                if (s == sizeof(si)) {
-                    if (si.psi.soi_kind == SOCKINFO_TCP) {
-                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport);
-                        int fport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_fport);
-                        if (lport == peer_remote_port && fport == proxy_local_port) {
+                if (s > (int)sizeof(struct proc_fileinfo)) {
+                    int kind = si.psi.soi_kind;
+                    if (kind == SOCKINFO_TCP || kind == SOCKINFO_IN || kind == 0) {
+                        int raw_lport = (int)(uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport;
+                        int raw_fport = (int)(uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_fport;
+                        int swap_lport = (int)ntohs((uint16_t)raw_lport);
+                        int swap_fport = (int)ntohs((uint16_t)raw_fport);
+
+                        int match_l = (raw_lport == peer_remote_port || swap_lport == peer_remote_port);
+                        int match_f = (raw_fport == proxy_local_port || swap_fport == proxy_local_port);
+                        if (match_l && match_f) {
                             if (!macos_get_proc_name_or_bundle(pid, out_name, max_len)) {
                                 snprintf(out_name, (size_t)max_len, "pid-%d", (int)pid);
                             }
@@ -680,6 +688,31 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
         if (fds != stack_fds) free(fds);
     }
     free(pids);
+
+    // Fast fallback using lsof for short-lived or race sockets
+    if (!found && peer_remote_port > 0) {
+        char cmd[128];
+        snprintf(cmd, sizeof(cmd), "lsof -n -P -iTCP:%d -sTCP:ESTABLISHED -F c 2>/dev/null", peer_remote_port);
+        FILE *fp = popen(cmd, "r");
+        if (fp) {
+            char line[256];
+            while (fgets(line, sizeof(line), fp)) {
+                if (line[0] == 'c' && line[1] != '\0') {
+                    char *nl = strchr(line, '\n');
+                    if (nl) *nl = '\0';
+                    char *pname = line + 1;
+                    while (*pname == ' ') pname++;
+                    if (*pname) {
+                        strncpy(out_name, pname, (size_t)max_len - 1);
+                        out_name[max_len - 1] = '\0';
+                        found = 1;
+                        break;
+                    }
+                }
+            }
+            pclose(fp);
+        }
+    }
     return found;
 }
 
@@ -720,11 +753,14 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
         for (int j = 0; j < count; ++j) {
             if (fds[j].proc_fdtype == PROX_FDTYPE_SOCKET) {
                 struct socket_fdinfo si;
+                memset(&si, 0, sizeof(si));
                 int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
-                if (s == sizeof(si)) {
-                    if (si.psi.soi_kind == SOCKINFO_TCP) {
-                        int lport = ntohs((uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport);
-                        if (lport == local_port) {
+                if (s > (int)sizeof(struct proc_fileinfo)) {
+                    int kind = si.psi.soi_kind;
+                    if (kind == SOCKINFO_TCP || kind == SOCKINFO_IN || kind == 0) {
+                        int raw_lport = (int)(uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_lport;
+                        int swap_lport = (int)ntohs((uint16_t)raw_lport);
+                        if (raw_lport == local_port || swap_lport == local_port) {
                             if (macos_get_proc_name_or_bundle(pid, out_name, max_len)) {
                                 found = 1;
                                 break;
@@ -1176,6 +1212,55 @@ int alya_vpn_check_peer_route(int proxy_local_port, int peer_remote_port, char *
         out_proc_name[max_len - 1] = '\0';
     }
     return alya_vpn_should_route(out_proc_name);
+}
+
+int alya_vpn_infer_process_from_host(const char *host, char *out_proc_name, int max_len) {
+    if (!host || !host[0] || !out_proc_name || max_len <= 0) return 0;
+    out_proc_name[0] = '\0';
+
+    char host_lower[256];
+    size_t hlen = strlen(host);
+    if (hlen >= sizeof(host_lower)) hlen = sizeof(host_lower) - 1;
+    for (size_t i = 0; i < hlen; ++i) host_lower[i] = (char)tolower((unsigned char)host[i]);
+    host_lower[hlen] = '\0';
+
+    for (int i = 0; i < s_split_app_count; ++i) {
+        char app_lower[64];
+        size_t alen = strlen(s_split_apps[i]);
+        if (alen >= sizeof(app_lower)) alen = sizeof(app_lower) - 1;
+        for (size_t j = 0; j < alen; ++j) app_lower[j] = (char)tolower((unsigned char)s_split_apps[i][j]);
+        app_lower[alen] = '\0';
+
+        if (alen > 4 && strcmp(app_lower + alen - 4, ".exe") == 0) {
+            app_lower[alen - 4] = '\0';
+            alen -= 4;
+        }
+
+        if (alen > 2 && strstr(host_lower, app_lower) != NULL) {
+            if (strcmp(app_lower, "discord") == 0) {
+                strncpy(out_proc_name, "Discord", (size_t)max_len - 1);
+            } else if (strcmp(app_lower, "chrome") == 0) {
+                strncpy(out_proc_name, "Chrome", (size_t)max_len - 1);
+            } else if (strcmp(app_lower, "steam") == 0) {
+                strncpy(out_proc_name, "Steam", (size_t)max_len - 1);
+            } else if (strcmp(app_lower, "spotify") == 0) {
+                strncpy(out_proc_name, "Spotify", (size_t)max_len - 1);
+            } else {
+                strncpy(out_proc_name, s_split_apps[i], (size_t)max_len - 1);
+            }
+            out_proc_name[max_len - 1] = '\0';
+            return 1;
+        }
+    }
+
+    if (strstr(host_lower, "discord") != NULL || strcmp(host_lower, "dis.gd") == 0 ||
+        (hlen > 7 && strcmp(host_lower + hlen - 7, ".dis.gd") == 0)) {
+        strncpy(out_proc_name, "Discord", (size_t)max_len - 1);
+        out_proc_name[max_len - 1] = '\0';
+        return 1;
+    }
+
+    return 0;
 }
 
 
