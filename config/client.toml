@@ -7,6 +7,10 @@ passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
 crypto_threads = 1
 io_threads = 2
+# DNS Protection:
+#   true  - Route DNS queries through encrypted VPN tunnel to prevent ISP tampering/censorship (default).
+#   false - Use local network DNS for direct connections.
+tunnel_dns = true
 
 [split_tunnel]
 # Modes:

@@ -22,10 +22,13 @@ function parse_socks5_request(client_sock)
 end
 
 # Starts the local SOCKS5 proxy and routes traffic according to split-tunneling configuration
-function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps, auto_sys_proxy)
+function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, split_mode, split_apps, auto_sys_proxy, tunnel_dns)
     # 1. Initialize native session key in C
     alya_vpn_set_session_passphrase(passphrase)
     let session_key = crypto::vpn_derive_key(passphrase)
+
+    # 2. Configure DNS tunneling
+    alya_vpn_set_tunnel_dns(tunnel_dns)
 
     # 3. Initialize native routing engine: set mode, then add each app individually.
     # NOTE: Alya array elements in string concatenation context are converted to their
@@ -65,11 +68,17 @@ function vpn_run_client_proxy(local_port, server_host, server_port, passphrase, 
         mode_str = "BLACKLIST (Listed apps bypass VPN)"
     end
 
+    let dns_str = "BYPASS (Local DNS)"
+    if tunnel_dns == 1
+        dns_str = "TUNNELED (Remote Encrypted DNS)"
+    end
+
     say("[INFO] ========================================")
     say("[INFO] Alya VPN Client Active")
     say("[INFO] Local SOCKS5 Proxy: 127.0.0.1:" + local_port)
     say("[INFO] Remote VPN Server:  " + server_host + ":" + server_port)
     say("[INFO] Split Tunnel Mode:  " + mode_str)
+    say("[INFO] DNS Protection:     " + dns_str)
     say("[INFO] Rules: " + len(split_apps) + " application(s) configured")
     say("[INFO] ========================================")
 

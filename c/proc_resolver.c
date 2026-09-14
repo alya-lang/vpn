@@ -1000,6 +1000,15 @@ int alya_vpn_sock_send_hex(int sock, const char *hex_str, int hex_len) {
 static int s_split_mode = 0; // 0 = all, 1 = include, 2 = exclude
 static char s_split_apps[128][64];
 static int s_split_app_count = 0;
+static int s_tunnel_dns = 1;
+
+void alya_vpn_set_tunnel_dns(int enable) {
+    s_tunnel_dns = enable ? 1 : 0;
+}
+
+int alya_vpn_get_tunnel_dns(void) {
+    return s_tunnel_dns;
+}
 
 static int pattern_match_c(const char *pattern, const char *text) {
     if (!pattern || !text || !pattern[0] || !text[0]) return 0;
@@ -1030,6 +1039,24 @@ static int pattern_match_c(const char *pattern, const char *text) {
         char delim = text[blen];
         if (delim == ' ' || delim == '-' || delim == '_' || delim == '.') {
             return 1;
+        }
+    }
+
+    // Substring in dot-separated bundle identifiers (e.g. "discord" matches "com.hnc.Discord" or "com.hnc.Discord.ShipIt")
+    if (blen >= 3 && strstr(text, ".") != NULL) {
+        char p_sub[128], t_sub[256];
+        for (size_t i = 0; i <= blen; ++i) p_sub[i] = (char)tolower((unsigned char)base[i]);
+        size_t ctlen = tlen < sizeof(t_sub) - 1 ? tlen : sizeof(t_sub) - 1;
+        for (size_t i = 0; i < ctlen; ++i) t_sub[i] = (char)tolower((unsigned char)text[i]);
+        t_sub[ctlen] = '\0';
+        char *hit = strstr(t_sub, p_sub);
+        if (hit) {
+            int ok_before = (hit == t_sub || *(hit - 1) == '.' || *(hit - 1) == '/' || *(hit - 1) == ' ');
+            char after_c = *(hit + blen);
+            int ok_after = (after_c == '\0' || after_c == '.' || after_c == ' ' || after_c == '-' || after_c == '_');
+            if (ok_before && ok_after) {
+                return 1;
+            }
         }
     }
     if (plen >= 2 && pattern[0] == '*' && pattern[plen - 1] == '*') {
@@ -1110,19 +1137,11 @@ void alya_vpn_add_routing_app(const char *app_name) {
 int alya_vpn_should_route(const char *proc_name) {
     if (s_split_mode == 0) return 1; // route all
 
-    // System DNS resolvers must ALWAYS be tunneled so DNS resolution never leaks or gets blocked
-    // by ISP / BTK DPI (e.g. mDNSResponder DoH/DoT to 1.1.1.1 / 8.8.8.8, systemd-resolved, etc.)
-    if (proc_name && (ALYA_STRICMP(proc_name, "mDNSResponder") == 0 ||
-                      ALYA_STRICMP(proc_name, "systemd-resolved") == 0 ||
-                      ALYA_STRICMP(proc_name, "dnsmasq") == 0 ||
-                      ALYA_STRICMP(proc_name, "named") == 0)) {
-        return 1;
-    }
-
-    // Discord on macOS spawns ShipIt and multiple Discord Helper processes
-    if (proc_name && (ALYA_STRICMP(proc_name, "ShipIt") == 0 ||
-                      ALYA_STRICMP(proc_name, "com.hnc.Discord.ShipIt") == 0 ||
-                      ALYA_STRNICMP(proc_name, "Discord", 7) == 0)) {
+    // System DNS resolvers are tunneled if tunnel_dns is enabled to prevent censorship/leaks
+    if (s_tunnel_dns && proc_name && (ALYA_STRICMP(proc_name, "mDNSResponder") == 0 ||
+                                      ALYA_STRICMP(proc_name, "systemd-resolved") == 0 ||
+                                      ALYA_STRICMP(proc_name, "dnsmasq") == 0 ||
+                                      ALYA_STRICMP(proc_name, "named") == 0)) {
         return 1;
     }
 
@@ -1155,13 +1174,13 @@ int alya_vpn_should_route_host(const char *host, int port) {
         return 0;
     }
 
-    // 2. DNS queries must ALWAYS route via VPN to prevent censorship / tampering
-    if (port == 53 || port == 853 ||
+    // 2. DNS queries route via VPN if tunnel_dns is enabled
+    if (s_tunnel_dns && (port == 53 || port == 853 ||
         strcmp(host, "1.1.1.1") == 0 || strcmp(host, "1.0.0.1") == 0 ||
         strcmp(host, "8.8.8.8") == 0 || strcmp(host, "8.8.4.4") == 0 ||
         strcmp(host, "9.9.9.9") == 0 || strcmp(host, "149.112.112.112") == 0 ||
         strcmp(host, "one.one.one.one") == 0 || strcmp(host, "cloudflare-dns.com") == 0 ||
-        strcmp(host, "dns.google") == 0) {
+        strcmp(host, "dns.google") == 0)) {
         return 1;
     }
 
@@ -1237,27 +1256,10 @@ int alya_vpn_infer_process_from_host(const char *host, char *out_proc_name, int 
         }
 
         if (alen > 2 && strstr(host_lower, app_lower) != NULL) {
-            if (strcmp(app_lower, "discord") == 0) {
-                strncpy(out_proc_name, "Discord", (size_t)max_len - 1);
-            } else if (strcmp(app_lower, "chrome") == 0) {
-                strncpy(out_proc_name, "Chrome", (size_t)max_len - 1);
-            } else if (strcmp(app_lower, "steam") == 0) {
-                strncpy(out_proc_name, "Steam", (size_t)max_len - 1);
-            } else if (strcmp(app_lower, "spotify") == 0) {
-                strncpy(out_proc_name, "Spotify", (size_t)max_len - 1);
-            } else {
-                strncpy(out_proc_name, s_split_apps[i], (size_t)max_len - 1);
-            }
+            strncpy(out_proc_name, s_split_apps[i], (size_t)max_len - 1);
             out_proc_name[max_len - 1] = '\0';
             return 1;
         }
-    }
-
-    if (strstr(host_lower, "discord") != NULL || strcmp(host_lower, "dis.gd") == 0 ||
-        (hlen > 7 && strcmp(host_lower + hlen - 7, ".dis.gd") == 0)) {
-        strncpy(out_proc_name, "Discord", (size_t)max_len - 1);
-        out_proc_name[max_len - 1] = '\0';
-        return 1;
     }
 
     return 0;

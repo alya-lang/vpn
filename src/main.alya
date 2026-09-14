@@ -10,7 +10,7 @@ import "./common/protocol.alya" as proto
 
 function print_banner()
     say("=================================================================")
-    say("           A L Y A   V P N   T U N N E L   (v0.2.1)              ")
+    say("           A L Y A   V P N   T U N N E L   (v0.2.2)              ")
     say("   High-Performance ChaCha20-Poly1305 Split-Tunneling Network    ")
     say("=================================================================")
 end
@@ -86,6 +86,7 @@ function load_client_config(config_path)
         "system_proxy": "true",
         "crypto_threads": 1,
         "io_threads": 2,
+        "tunnel_dns": "true",
         "apps": []
     }
     let in_apps = 0
@@ -116,6 +117,8 @@ function load_client_config(config_path)
                 cfg["crypto_threads"] = proto::parse_number(strip_val(val))
             else if key == "io_threads"
                 cfg["io_threads"] = proto::parse_number(strip_val(val))
+            else if key == "tunnel_dns" or key == "route_dns"
+                cfg["tunnel_dns"] = strip_val(val)
             else if key == "apps"
                 in_apps = 1
                 let bracket_open = proto::find_char(val, "[")
@@ -274,6 +277,7 @@ function main()
         let split_mode = router::mode_exclude() # Default blacklist
         let app_list = ["discord", "Discord.exe"]
         let auto_sys_proxy = 1
+        let tunnel_dns = 1
         let crypto_threads = 1
         let io_threads = 2
 
@@ -297,6 +301,9 @@ function main()
             end
             if file_cfg["system_proxy"] == "false" or file_cfg["system_proxy"] == "0"
                 auto_sys_proxy = 0
+            end
+            if file_cfg["tunnel_dns"] == "false" or file_cfg["tunnel_dns"] == "0"
+                tunnel_dns = 0
             end
             if len(file_cfg["apps"]) > 0
                 app_list = file_cfg["apps"]
@@ -324,6 +331,9 @@ function main()
                     end
                     if custom_cfg["system_proxy"] == "false" or custom_cfg["system_proxy"] == "0"
                         auto_sys_proxy = 0
+                    end
+                    if custom_cfg["tunnel_dns"] == "false" or custom_cfg["tunnel_dns"] == "0"
+                        tunnel_dns = 0
                     end
                     if len(custom_cfg["apps"]) > 0
                         app_list = custom_cfg["apps"]
@@ -374,6 +384,17 @@ function main()
             else if args_list[i] == "--no-system-proxy" or args_list[i] == "--no-proxy"
                 auto_sys_proxy = 0
                 i += 1
+            else if args_list[i] == "--no-dns"
+                tunnel_dns = 0
+                i += 1
+            else if args_list[i] == "--tunnel-dns" and i + 1 < len(args_list)
+                let td = lower(args_list[i + 1])
+                if td == "false" or td == "0"
+                    tunnel_dns = 0
+                else
+                    tunnel_dns = 1
+                end
+                i += 2
             else
                 i += 1
             end
@@ -386,7 +407,7 @@ function main()
             return 1
         end
         say("[INFO] Thread pool initialized: " + crypto_threads + " crypto workers, " + io_threads + " I/O workers")
-        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list, auto_sys_proxy)
+        client::vpn_run_client_proxy(proxy_port, srv_host, srv_port, pass, split_mode, app_list, auto_sys_proxy, tunnel_dns)
         return 0
     end
 
