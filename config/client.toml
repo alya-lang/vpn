@@ -13,7 +13,7 @@ crypto_threads = 2
 io_threads = 4
 
 # Automatically configure operating system proxy (Windows/macOS) on startup and restore on exit
-auto_sys_proxy = false
+auto_sys_proxy = true
 
 [connection]
 # Automatically reconnect if VPN server connection drops
