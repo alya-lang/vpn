@@ -4,7 +4,7 @@
 bind_address = "0.0.0.0"
 port = 51821
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
-protocol = "udp"
+protocol = "tcp"
 crypto_threads = 2
 io_threads = 4
 
