@@ -98,7 +98,6 @@ bypass_lan_ranges = [
 
 # Target applications to route/bypass (process name or pattern, case-insensitive, .exe optional)
 apps = [
-    "Speedtest",
     "Discord",
     "Discord Helper",
     "ShipIt",
