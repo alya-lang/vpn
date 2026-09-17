@@ -9,8 +9,8 @@ server_host = "127.0.0.1"
 server_port = 51821
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
-crypto_threads = 1
-io_threads = 2
+crypto_threads = 2
+io_threads = 4
 
 # Automatically configure operating system proxy (Windows/macOS) on startup and restore on exit
 auto_sys_proxy = false
