@@ -42,8 +42,8 @@ idle_timeout_sec = 300
 
 [monitoring]
 # Periodically print server traffic statistics (Active clients, active channels, TX/RX throughput)
-show_stats = false
-stats_interval_sec = 60
+show_stats = true
+stats_interval_sec = 10
 
 [logging]
 # Log each client connection and disconnection event
