@@ -57,31 +57,31 @@ jobs:
       - name: Set up Alya Compiler (macOS x86_64 via Rosetta)
         if: matrix.target.platform == 'x86_64-macos'
         run: |
-          curl -sSL -o alyac-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.17/alyac-v0.0.17-x86_64-macos.tar.gz || curl -sSL -o alyac-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.16/alyac-v0.0.16-x86_64-macos.tar.gz || curl -sSL -o alyac-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.15/alyac-v0.0.15-x86_64-macos.tar.gz
-          tar -xzf alyac-x64.tar.gz
-          sudo cp alyac-*/alyac /usr/local/bin/alyac
-          sudo chmod +x /usr/local/bin/alyac
-          rm -rf alyac-x64.tar.gz alyac-*
+          curl -sSL -o alya-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.17/alya-v0.0.17-x86_64-macos.tar.gz || curl -sSL -o alya-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.16/alya-v0.0.16-x86_64-macos.tar.gz || curl -sSL -o alya-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.15/alya-v0.0.15-x86_64-macos.tar.gz
+          tar -xzf alya-x64.tar.gz
+          sudo cp alya-*/alya /usr/local/bin/alya
+          sudo chmod +x /usr/local/bin/alya
+          rm -rf alya-x64.tar.gz alya-*
 
-      - name: Verify alyac installation (Unix)
+      - name: Verify alya installation (Unix)
         if: runner.os != 'Windows'
         run: |
           if [ "${{ matrix.target.platform }}" = "x86_64-macos" ]; then
-            arch -x86_64 alyac --version
+            arch -x86_64 alya --version
           else
-            alyac --version
+            alya --version
           fi
 
-      - name: Verify alyac installation (Windows)
+      - name: Verify alya installation (Windows)
         if: runner.os == 'Windows'
         run: |
-          alyac --version
+          alya --version
 
       - name: Build binary (Unix)
         if: runner.os != 'Windows'
         run: |
           if [ "${{ matrix.target.platform }}" = "x86_64-macos" ]; then
-            arch -x86_64 alyac src/main.alya -S -o main.s
+            arch -x86_64 alya src/main.alya -S -o main.s
             clang -arch x86_64 -O2 -std=c11 -Ic -c c/crypto.c -o crypto.o
             clang -arch x86_64 -O2 -std=c11 -Ic -c c/proc_resolver.c -o proc_resolver.o
             clang -arch x86_64 -O2 -std=c11 -Ic -c c/buffer_pool.c -o buffer_pool.o
@@ -90,14 +90,14 @@ jobs:
             rm -f main.s *.o
             file ${{ matrix.target.binary }}
           else
-            alyac build -o ${{ matrix.target.binary }}
+            alya build -o ${{ matrix.target.binary }}
             file ${{ matrix.target.binary }}
           fi
 
       - name: Build binary (Windows)
         if: runner.os == 'Windows'
         run: |
-          alyac build -o ${{ matrix.target.binary }}
+          alya build -o ${{ matrix.target.binary }}
 
       - name: Package artifacts (Unix)
         if: matrix.target.archive == 'tar.gz'

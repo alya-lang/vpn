@@ -17,7 +17,7 @@ Fixes # (issue)
 
 Please describe the tests that you ran to verify your changes.
 
-- [ ] Package test suite passes (`alyac run tests/...`)
+- [ ] Package test suite passes (`alya run tests/...`)
 - [ ] Added new test cases covering this change
 
 ## 📋 Checklist

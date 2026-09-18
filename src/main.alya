@@ -17,7 +17,7 @@ end
 
 function print_usage()
     print_banner()
-    say("Usage: alyac run src/main.alya -- <command> [options]\n")
+    say("Usage: alya run src/main.alya -- <command> [options]\n")
     say("Commands:")
     say("  server                      Start the remote VPN tunnel server")
     say("    --bind <ip>               Bind address (default: 0.0.0.0)")
@@ -997,7 +997,7 @@ function main()
     # --- COMMAND: CHECK PORT ---
     if cmd == "check-port"
         if len(args_list) < 2
-            say("Usage: alyac run src/main.alya -- check-port <port_number>")
+            say("Usage: alya run src/main.alya -- check-port <port_number>")
             return 1
         end
         let target_port = proto::parse_number(args_list[1])

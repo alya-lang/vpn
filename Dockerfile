@@ -1,6 +1,6 @@
 # ==============================================================================
 # Alya VPN Server - Production Dockerfile
-# Ubuntu 24.04 (Noble) based container matching alyac GLIBC 2.39+
+# Ubuntu 24.04 (Noble) based container matching alya GLIBC 2.39+
 # ==============================================================================
 
 FROM ubuntu:24.04 AS builder
@@ -17,10 +17,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Alya Compiler (alyac)
-RUN curl -fsSL "https://github.com/alya-lang/alya/releases/download/v${ALYA_VERSION}/alyac-v${ALYA_VERSION}-x86_64-linux.tar.gz" | tar -xz --strip-components=1 -C /usr/local/bin \
-    && chmod +x /usr/local/bin/alyac \
-    && alyac --version
+# Install Alya Compiler (alya)
+RUN curl -fsSL "https://github.com/alya-lang/alya/releases/download/v${ALYA_VERSION}/alya-v${ALYA_VERSION}-x86_64-linux.tar.gz" | tar -xz --strip-components=1 -C /usr/local/bin \
+    && chmod +x /usr/local/bin/alya \
+    && alya --version
 
 WORKDIR /build
 
@@ -28,7 +28,7 @@ WORKDIR /build
 COPY . .
 
 # Compile native binary with bundled C crypto & process inspection
-RUN alyac build src/main.alya -o /build/alya-vpn-server
+RUN alya build src/main.alya -o /build/alya-vpn-server
 
 # ==============================================================================
 # Production Runtime Container

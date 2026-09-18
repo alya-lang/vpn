@@ -114,7 +114,7 @@ Any frame with an invalid Poly1305 MAC tag or invalid header is immediately drop
 ## 💻 Quick Start & Usage
 
 ### Prerequisites
-- [Alya Compiler](https://github.com/alya-lang/alya) (`alyac`) `v0.0.17` or later installed.
+- [Alya Compiler](https://github.com/alya-lang/alya) `v0.0.17` or later installed.
 - C compiler (`gcc` or `clang`) for native C compilation via `[build]` directive.
 
 ### 1. Run the VPN Server (on VPS)
@@ -132,10 +132,10 @@ To view logs:
 docker compose logs -f
 ```
 
-#### Option B: Using Alya CLI (`alyac`) directly
+#### Option B: Using Alya CLI directly
 
 ```bash
-alyac run src/main.alya -- server
+alya run src/main.alya -- server
 ```
 *Options:*
 - `--port <number>`: Override bind port (default: `51821`).
@@ -144,7 +144,7 @@ alyac run src/main.alya -- server
 ### 2. Run the Client (on local machine)
 
 ```bash
-alyac run src/main.alya -- client
+alya run src/main.alya -- client
 ```
 *Options:*
 - `--server <host:port>`: VPN server endpoint (default: `127.0.0.1:51821`).
@@ -185,19 +185,19 @@ Alya VPN includes an automated test suite covering cryptography, wire framing, s
 
 ```bash
 # 1. Cryptography verification (ChaCha20-Poly1305 AEAD roundtrip & tamper detection)
-alyac run tests/test_crypto.alya
+alya run tests/test_crypto.alya
 
 # 2. Wire framing & packet serialization
-alyac run tests/test_protocol.alya
+alya run tests/test_protocol.alya
 
 # 3. Split-tunneling rules & wildcard matching
-alyac run tests/test_rules.alya
+alya run tests/test_rules.alya
 
 # 4. End-to-End simulation (handshake -> connect -> duplex stream -> teardown)
-alyac run tests/test_e2e.alya
+alya run tests/test_e2e.alya
 
 # 5. Throughput benchmark
-alyac run src/main.alya -- benchmark
+alya run src/main.alya -- benchmark
 ```
 
 ---

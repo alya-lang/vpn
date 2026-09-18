@@ -36,8 +36,8 @@ body:
     id: version
     attributes:
       label: Alya Version
-      description: Run `alyac --version` and paste the output here.
-      placeholder: "alyac 0.0.14"
+      description: Run `alya --version` and paste the output here.
+      placeholder: "alya 0.0.14"
     validations:
       required: true
   - type: dropdown
