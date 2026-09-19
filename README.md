@@ -1,6 +1,6 @@
 # Alya VPN 🛡️
 
-[![Alya](https://img.shields.io/badge/Alya-0.0.17-blue.svg)](https://github.com/alya-lang/alya)
+[![Alya](https://img.shields.io/badge/Alya-0.0.18-blue.svg)](https://github.com/alya-lang/alya)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/Crypto-ChaCha20--Poly1305%20AEAD-green.svg)](#security--cryptography)
 [![Split-Tunneling](https://img.shields.io/badge/Split--Tunneling-Per--App%20Filter-purple.svg)](#split-tunneling-engine)
@@ -42,7 +42,7 @@ flowchart LR
 
     subgraph Server ["VPN Remote Server (VPS)"]
         direction TB
-        NetWire --> ServerEngine["Alya VPN Server Daemon\n(0.0.0.0:8443)"]
+        NetWire --> ServerEngine["Alya VPN Server Daemon\n(0.0.0.0:51822)"]
         ServerEngine --> Decryptor["AEAD Decrypt &\nPoly1305 MAC Verification"]
         Decryptor --> Forwarder["Remote Target Forwarder"]
         Forwarder --> TargetDest["Discord Gateway / Web Endpoints"]
