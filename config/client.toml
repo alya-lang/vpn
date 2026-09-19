@@ -6,7 +6,7 @@ bind_address = "127.0.0.1"
 local_proxy_port = 1080
 
 server_host = "127.0.0.1"
-server_port = 51821
+server_port = 51822
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
 crypto_threads = 2
