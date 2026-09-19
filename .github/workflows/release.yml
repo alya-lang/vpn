@@ -84,6 +84,7 @@ jobs:
         run: |
           if [ "${{ matrix.target.platform }}" = "x86_64-macos" ]; then
             arch -x86_64 alya src/main.alya -S -o main.s
+            sed -i.bak -e 's/add \$\([0-9]*\), alya_allocated_bytes/addq $\1, alya_allocated_bytes/g' main.s && rm -f main.s.bak
             clang -arch x86_64 -O2 -std=c11 -Ic -c c/crypto.c -o crypto.o
             clang -arch x86_64 -O2 -std=c11 -Ic -c c/proc_resolver.c -o proc_resolver.o
             clang -arch x86_64 -O2 -std=c11 -Ic -c c/buffer_pool.c -o buffer_pool.o
