@@ -2,7 +2,7 @@
 [server]
 # Network interface address to bind to ("0.0.0.0" for all interfaces, or a specific local IP)
 bind_address = "0.0.0.0"
-port = 51821
+port = 51822
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "tcp"
 crypto_threads = 2

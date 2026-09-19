@@ -21,7 +21,7 @@ function print_usage()
     say("Commands:")
     say("  server                      Start the remote VPN tunnel server")
     say("    --bind <ip>               Bind address (default: 0.0.0.0)")
-    say("    --port <port>             Listen port (default: 51821)")
+    say("    --port <port>             Listen port (default: 51822)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
     say("    --backlog <N>             Pending connection queue (default: 128)")
     say("    --max-clients <N>         Max concurrent clients (default: 100)")
@@ -38,7 +38,7 @@ function print_usage()
     say("  client                      Start the local client SOCKS5 proxy")
     say("    --bind <ip>               Local bind address (default: 127.0.0.1)")
     say("    --server <host>           Remote VPN server host (default: 127.0.0.1)")
-    say("    --port <port>             Remote VPN server port (default: 51821)")
+    say("    --port <port>             Remote VPN server port (default: 51822)")
     say("    --proxy <port>            Local SOCKS5 proxy port (default: 1080)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
     say("    --mode <all|inc|exc>      Split-tunnel mode:")
@@ -107,7 +107,7 @@ function load_client_config(config_path)
     let lines = proto::split_string(content, "\n")
     let cfg = {
         "server_host": "127.0.0.1",
-        "server_port": 51821,
+        "server_port": 51822,
         "local_port": 1080,
         "bind_address": "127.0.0.1",
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
@@ -258,7 +258,7 @@ function load_server_config(config_path)
     let lines = proto::split_string(content, "\n")
     let cfg = {
         "bind_address": "0.0.0.0",
-        "port": 51821,
+        "port": 51822,
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "crypto_threads": 2,
         "io_threads": 4,
@@ -389,7 +389,7 @@ function main()
     # --- COMMAND: SERVER ---
     if cmd == "server"
         let bind_address = "0.0.0.0"
-        let port = 51821
+        let port = 51822
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let crypto_threads = 2
         let io_threads = 4
@@ -588,7 +588,7 @@ function main()
     if cmd == "client"
         let bind_address = "127.0.0.1"
         let srv_host = "127.0.0.1"
-        let srv_port = 51821
+        let srv_port = 51822
         let proxy_port = 1080
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let split_mode = router::mode_exclude() # Default blacklist
