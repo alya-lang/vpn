@@ -3,6 +3,7 @@ import "std/test"
 import "../src/common/crypto.alya" as crypto
 import "../src/common/protocol.alya" as proto
 import "../src/client/router.alya" as router
+import "../src/ffi.alya"
 
 function main()
     test_suite("Alya VPN End-to-End Flow Suite")
@@ -78,6 +79,17 @@ function main()
     let corrupted_frame = client_frame.substring(0, 60) + "FF" + client_frame.substring(62)
     let corrupt_type, corrupt_payload = proto::unpack_frame(key, corrupted_frame)
     runner_assert_eq(r, corrupt_payload, null, "Corrupted wire frame immediately rejected by ChaCha20-Poly1305 MAC")
+
+    # 8. Server Active Client Tracking & Disconnect Detection
+    runner_assert_eq(r, alya_vpn_srv_get_active_clients(), 0, "Initial active clients should be 0")
+    let conn_allowed = alya_vpn_srv_client_connected()
+    runner_assert_eq(r, conn_allowed, 1, "Client connection counter accepted")
+    runner_assert_eq(r, alya_vpn_srv_get_active_clients(), 1, "Active clients should be 1 after connect")
+    alya_vpn_srv_client_disconnected()
+    runner_assert_eq(r, alya_vpn_srv_get_active_clients(), 0, "Active clients should decrement back to 0 on disconnect")
+    let pump_err = alya_vpn_pump_server_vpn(-1)
+    runner_assert_eq(r, pump_err, -1, "pump_server_vpn on invalid/closed socket returns signed -1")
+    runner_assert_eq(r, pump_err < 0, true, "pump_server_vpn return value is correctly negative on disconnect")
 
     let failed = runner_summary(r)
     if failed > 0

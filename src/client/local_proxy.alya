@@ -266,9 +266,7 @@ function vpn_run_client_proxy(cfg)
 
         # 2. Check VPN Tunnel (High-speed zero-copy native pump in C)
         let vpn_res = alya_vpn_pump_client_vpn(vpn_sock)
-        if vpn_res > 0
-            activity = 1
-        else if vpn_res < 0
+        if vpn_res < 0 or vpn_res == 4294967295 or vpn_res == -1
             if kill_switch == 1 and auto_reconnect == 0
                 say("[KILL-SWITCH] VPN server connection lost. Traffic blocked immediately to prevent IP leak.")
                 break
@@ -310,6 +308,8 @@ function vpn_run_client_proxy(cfg)
                 say("[ERROR] VPN server connection lost. Exiting.")
                 break
             end
+        else if vpn_res > 0
+            activity = 1
         end
 
         # 3. Check Direct Connections (Bypass mode) — native zero-copy C pump

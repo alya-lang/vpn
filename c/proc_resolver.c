@@ -2349,7 +2349,7 @@ int alya_vpn_send_ping(int sock, int ch_id) {
     return -1;
 }
 
-int alya_vpn_pump_client_vpn(int vpn_sock) {
+int64_t alya_vpn_pump_client_vpn(int vpn_sock) {
     if (vpn_sock < 0) return -1;
     set_sock_nonblocking(vpn_sock);
     int activity = 0;
@@ -2479,7 +2479,9 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
                 sizeof(s_vpn_tx_frame)
             );
             if (flen > 0) {
-                send_all(vpn_sock, s_vpn_tx_frame, flen);
+                if (send_all(vpn_sock, s_vpn_tx_frame, flen) < 0) {
+                    return -1;
+                }
             }
             close_sock(app_sock);
             s_client_channels[i].in_use = 0;
@@ -2501,7 +2503,9 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
                 sizeof(s_vpn_tx_frame)
             );
             if (flen > 0) {
-                send_all(vpn_sock, s_vpn_tx_frame, flen);
+                if (send_all(vpn_sock, s_vpn_tx_frame, flen) < 0) {
+                    return -1;
+                }
             }
         } else if (n == 0) {
             int flen = alya_vpn_pack_frame_av02(
@@ -2513,7 +2517,9 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
                 sizeof(s_vpn_tx_frame)
             );
             if (flen > 0) {
-                send_all(vpn_sock, s_vpn_tx_frame, flen);
+                if (send_all(vpn_sock, s_vpn_tx_frame, flen) < 0) {
+                    return -1;
+                }
             }
             close_sock(app_sock);
             s_client_channels[i].in_use = 0;
@@ -2530,7 +2536,9 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
                     sizeof(s_vpn_tx_frame)
                 );
                 if (flen > 0) {
-                    send_all(vpn_sock, s_vpn_tx_frame, flen);
+                    if (send_all(vpn_sock, s_vpn_tx_frame, flen) < 0) {
+                        return -1;
+                    }
                 }
                 close_sock(app_sock);
                 s_client_channels[i].in_use = 0;
@@ -2543,7 +2551,7 @@ int alya_vpn_pump_client_vpn(int vpn_sock) {
     return activity;
 }
 
-int alya_vpn_pump_server_vpn(int client_sock) {
+int64_t alya_vpn_pump_server_vpn(int client_sock) {
     if (client_sock < 0) return -1;
     set_sock_nonblocking(client_sock);
     int activity = 0;
@@ -2678,7 +2686,9 @@ int alya_vpn_pump_server_vpn(int client_sock) {
                     sizeof(s_srv_tx_frame)
                 );
                 if (rlen > 0) {
-                    send_all(client_sock, s_srv_tx_frame, rlen);
+                    if (send_all(client_sock, s_srv_tx_frame, rlen) < 0) {
+                        return -1;
+                    }
                 }
             } else if (out_type == ALYA_AV02_MSG_CLOSE) {
                 int dest_sock = alya_vpn_srv_ch_get((int)out_ch);
@@ -2696,7 +2706,9 @@ int alya_vpn_pump_server_vpn(int client_sock) {
                     sizeof(s_srv_tx_frame)
                 );
                 if (plen > 0) {
-                    send_all(client_sock, s_srv_tx_frame, plen);
+                    if (send_all(client_sock, s_srv_tx_frame, plen) < 0) {
+                        return -1;
+                    }
                 }
             }
         }
@@ -2726,7 +2738,9 @@ int alya_vpn_pump_server_vpn(int client_sock) {
                 sizeof(s_srv_tx_frame)
             );
             if (flen > 0) {
-                send_all(client_sock, s_srv_tx_frame, flen);
+                if (send_all(client_sock, s_srv_tx_frame, flen) < 0) {
+                    return -1;
+                }
             }
             close_sock(dest_sock);
             s_server_channels[i].in_use = 0;
@@ -2748,7 +2762,9 @@ int alya_vpn_pump_server_vpn(int client_sock) {
                 sizeof(s_srv_tx_frame)
             );
             if (flen > 0) {
-                send_all(client_sock, s_srv_tx_frame, flen);
+                if (send_all(client_sock, s_srv_tx_frame, flen) < 0) {
+                    return -1;
+                }
             }
         } else if (n == 0) {
             int flen = alya_vpn_pack_frame_av02(
@@ -2760,7 +2776,9 @@ int alya_vpn_pump_server_vpn(int client_sock) {
                 sizeof(s_srv_tx_frame)
             );
             if (flen > 0) {
-                send_all(client_sock, s_srv_tx_frame, flen);
+                if (send_all(client_sock, s_srv_tx_frame, flen) < 0) {
+                    return -1;
+                }
             }
             close_sock(dest_sock);
             s_server_channels[i].in_use = 0;
@@ -2777,7 +2795,9 @@ int alya_vpn_pump_server_vpn(int client_sock) {
                     sizeof(s_srv_tx_frame)
                 );
                 if (flen > 0) {
-                    send_all(client_sock, s_srv_tx_frame, flen);
+                    if (send_all(client_sock, s_srv_tx_frame, flen) < 0) {
+                        return -1;
+                    }
                 }
                 close_sock(dest_sock);
                 s_server_channels[i].in_use = 0;

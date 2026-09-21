@@ -175,13 +175,13 @@ int alya_vpn_open_client_channel(int vpn_sock, int channel_id, const char *host,
 // Reads AV02 binary frames from vpn_sock and forwards raw payload directly to app sockets;
 // Reads raw application bytes from active channels, encrypts into AV02 frames, and forwards to vpn_sock.
 // Returns 1 if activity, 0 if idle, -1 if vpn_sock closed/error.
-int alya_vpn_pump_client_vpn(int vpn_sock);
+int64_t alya_vpn_pump_client_vpn(int vpn_sock);
 
 // High-speed native server tunnel pump:
 // Reads AV02 binary frames from client_sock, handles CONNECT_REQ / DATA / CLOSE / PING;
 // Reads raw destination bytes from active server channels, encrypts into AV02 frames, forwards to client_sock.
 // Returns 1 if activity, 0 if idle, -1 if client_sock closed/error.
-int alya_vpn_pump_server_vpn(int client_sock);
+int64_t alya_vpn_pump_server_vpn(int client_sock);
 
 // Automatically configures or restores the OS system proxy (127.0.0.1:port)
 void alya_vpn_set_system_proxy(int enable, int port);

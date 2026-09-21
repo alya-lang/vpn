@@ -117,8 +117,8 @@ extern "C"
 
     # Native High-Speed VPN Tunnel Pumps (Zero Alya Allocations, Raw Binary Streaming)
     function alya_vpn_open_client_channel(vpn_sock: i32, channel_id: i32, host: str, port: i32, app_sock: i32) -> i32
-    function alya_vpn_pump_client_vpn(vpn_sock: i32) -> i32
-    function alya_vpn_pump_server_vpn(client_sock: i32) -> i32
+    function alya_vpn_pump_client_vpn(vpn_sock: i32) -> i64
+    function alya_vpn_pump_server_vpn(client_sock: i32) -> i64
     function alya_vpn_set_system_proxy(enable: i32, port: i32) -> void
     function alya_vpn_init_system_proxy_hook() -> void
     function alya_vpn_is_stop_requested() -> i32
