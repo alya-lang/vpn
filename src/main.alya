@@ -10,7 +10,7 @@ import "./common/protocol.alya" as proto
 
 function print_banner()
     say("=================================================================")
-    say("           A L Y A   V P N   T U N N E L   (v0.2.10)             ")
+    say("            A L Y A   V P N   T U N N E L   (v0.2.10)            ")
     say("   High-Performance ChaCha20-Poly1305 Split-Tunneling Network    ")
     say("=================================================================")
 end
