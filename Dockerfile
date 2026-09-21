@@ -5,7 +5,7 @@
 
 FROM ubuntu:24.04 AS builder
 
-ARG ALYA_VERSION=0.0.18
+ARG ALYA_VERSION=0.0.19
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime C build essentials and download utilities

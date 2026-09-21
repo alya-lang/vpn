@@ -57,6 +57,7 @@ jobs:
       - name: Set up Alya Compiler (macOS x86_64 via Rosetta)
         if: matrix.target.platform == 'x86_64-macos'
         run: |
+          curl -fsSL -o alya-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.19/alya-v0.0.19-x86_64-macos.tar.gz || \
           curl -fsSL -o alya-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.18/alya-v0.0.18-x86_64-macos.tar.gz || \
           curl -fsSL -o alya-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.17/alya-v0.0.17-x86_64-macos.tar.gz || \
           curl -fsSL -o alya-x64.tar.gz https://github.com/alya-lang/alya/releases/download/v0.0.16/alya-v0.0.16-x86_64-macos.tar.gz

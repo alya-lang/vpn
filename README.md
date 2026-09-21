@@ -1,6 +1,6 @@
 # Alya VPN 🛡️
 
-[![Alya](https://img.shields.io/badge/Alya-0.0.18-blue.svg)](https://github.com/alya-lang/alya)
+[![Alya](https://img.shields.io/badge/Alya-0.0.19-blue.svg)](https://github.com/alya-lang/alya)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Security](https://img.shields.io/badge/Crypto-ChaCha20--Poly1305%20AEAD-green.svg)](#security--cryptography)
 [![Split-Tunneling](https://img.shields.io/badge/Split--Tunneling-Per--App%20Filter-purple.svg)](#split-tunneling-engine)
