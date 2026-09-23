@@ -1,7 +1,6 @@
 # Alya VPN - Protocol Specification and Frame Serialization
 # Pure Alya implementation without external dependencies
 
-import "./crypto.alya" as crypto
 import "../ffi.alya"
 
 # Message Types

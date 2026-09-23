@@ -2,7 +2,6 @@
 # Listens for client tunnels, authenticates frames, and forwards payload traffic to destination hosts
 
 import "std/net" as net
-import "std/os" as os
 import "std/thread" as thread
 import "../common/crypto.alya" as crypto
 import "../common/protocol.alya" as proto
@@ -169,7 +168,7 @@ function vpn_client_thread(client_sock)
 end
 
 # Handles a single connected client session
-function vpn_handle_client(client_sock, session_key)
+function vpn_handle_client(client_sock, _session_key)
     alya_vpn_srv_ch_clear()
 
     while 1

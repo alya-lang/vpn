@@ -1,5 +1,4 @@
 import "../src/ffi.alya"
-import "../src/client/resolver.alya" as resolver
 
 function main()
     alya_vpn_set_routing(1, "chrome.exe,chrome,curl.exe,curl")

@@ -77,7 +77,7 @@ function main()
 
     # 7. Wire Tampering Rejection during Active Stream
     let corrupted_frame = client_frame.substring(0, 60) + "FF" + client_frame.substring(62)
-    let corrupt_type, corrupt_payload = proto::unpack_frame(key, corrupted_frame)
+    let _corrupt_type, corrupt_payload = proto::unpack_frame(key, corrupted_frame)
     runner_assert_eq(r, corrupt_payload, null, "Corrupted wire frame immediately rejected by ChaCha20-Poly1305 MAC")
 
     # 8. Server Active Client Tracking & Disconnect Detection

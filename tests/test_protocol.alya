@@ -35,7 +35,7 @@ function main()
 
     # 4. Tamper detection (Poly1305 MAC failure)
     let tampered_frame = frame.substring(0, 64) + "00" + frame.substring(66)
-    let t_type, t_payload = proto::unpack_frame(key, tampered_frame)
+    let _t_type, t_payload = proto::unpack_frame(key, tampered_frame)
     runner_assert_eq(r, t_payload, null, "Tampered frame must fail Poly1305 MAC check")
 
     let failed = runner_summary(r)

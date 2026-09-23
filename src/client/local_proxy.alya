@@ -3,9 +3,7 @@
 
 import "std/net" as net
 import "./resolver.alya" as resolver
-import "./router.alya" as router
 import "../common/crypto.alya" as crypto
-import "../common/protocol.alya" as proto
 import "../common/thread_pool.alya" as tpool
 import "../ffi.alya"
 
@@ -53,7 +51,7 @@ function vpn_run_client_proxy(cfg)
 
     # 1. Initialize native session key in C
     alya_vpn_set_session_passphrase(passphrase)
-    let session_key = crypto::vpn_derive_key(passphrase)
+    let _session_key = crypto::vpn_derive_key(passphrase)
 
     # 2. Configure DNS tunneling, servers, and resolvers
     alya_vpn_set_tunnel_dns(tunnel_dns)
