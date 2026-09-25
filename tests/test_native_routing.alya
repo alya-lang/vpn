@@ -86,6 +86,8 @@ function main()
     runner_assert_eq(r, alya_vpn_should_route_host("fd12:3456::1", 443), 0, "IPv6 ULA bypasses VPN")
     runner_assert_eq(r, alya_vpn_should_route_host("FE80::1", 443), 0, "IPv6 link-local bypasses VPN case-insensitively")
     runner_assert_eq(r, alya_vpn_should_route_host("2001:db8::1", 443), -1, "Global IPv6 defers to process decision")
+    runner_assert_eq(r, alya_vpn_should_route_host("::ffff:127.0.0.1", 443), 0, "v4-mapped loopback bypasses VPN")
+    runner_assert_eq(r, alya_vpn_should_route_host("fec0::1", 443), 0, "Deprecated site-local bypasses VPN")
 
     routing_reset_neutral()
 

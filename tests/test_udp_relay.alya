@@ -1,7 +1,8 @@
 # Unit tests for forward-protocol gating and the client UDP relay lifecycle.
-# Binds a real loopback UDP socket (ephemeral port); no server needed.
+# Binds real loopback sockets (ephemeral ports); no server needed.
 # Forward-protocol state is restored to Both at the end of the suite.
 import "std/test"
+import "std/net" as net
 import "../src/ffi.alya"
 
 function main()
@@ -24,6 +25,14 @@ function main()
     runner_assert_eq(r, relay_port > 0, true, "Relay binds an ephemeral loopback port")
     runner_assert_eq(r, alya_vpn_udp_relay_port(), relay_port, "Relay port getter matches bound port")
     runner_assert_eq(r, alya_vpn_udp_relay_init("127.0.0.1", 0), relay_port, "Second init is idempotent")
+
+    # IPv6 twin: loopback listen, readable bound port, relay v6 endpoint
+    let l6 = alya_vpn_tcp_listen6("::1", 0, 16)
+    runner_assert_eq(r, l6 >= 0, true, "IPv6 listen binds ::1")
+    runner_assert_eq(r, alya_vpn_tcp_bound_port(l6) > 0, true, "Bound IPv6 port is readable")
+    runner_assert_eq(r, alya_vpn_tcp_bound_port(-1), -1, "Bound port of invalid socket is -1")
+    net::tcp_close(l6)
+    runner_assert_eq(r, alya_vpn_udp_relay_port6() > 0, true, "IPv6 relay endpoint exists after dual init")
 
     # 3. Idle pump is a safe no-op without associations or tunnel
     runner_assert_eq(r, alya_vpn_pump_client_udp_out(-1), 0, "Idle relay pump reports no activity")

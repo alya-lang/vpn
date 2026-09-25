@@ -187,6 +187,12 @@ a proxy works, raw UDP/ICMP/ping from proxy-unaware apps does not enter it:
   `#enable-quic` → Disabled), otherwise UDP/443 bypasses the proxy.
 - curl: `curl -x socks5h://127.0.0.1:1080 <url>` (`socks5h` = remote DNS).
 - Prefer DNS-over-HTTPS in browsers; OS-level UDP/53 never enters SOCKS.
+- Dual-stack: the proxy, the UDP relay and the server all listen on IPv4
+  and IPv6 (`127.0.0.1` + `[::1]` by default), and forwarding targets may
+  be either family (IPv4 preferred). Apps using `localhost`/`::1` work.
+  (Cosmetic: IPv6 SOCKS peers show as `[unknown:port]` because the Alya
+  runtime does not report v6 peer ports yet; routing by host rules is
+  unaffected.)
 
 ---
 

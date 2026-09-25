@@ -4,6 +4,7 @@
 import "std/net" as net
 import "./resolver.alya" as resolver
 import "../common/crypto.alya" as crypto
+import "../common/protocol.alya" as proto
 import "../common/thread_pool.alya" as tpool
 import "../ffi.alya"
 
@@ -41,6 +42,23 @@ function udp_relay_select(configured_port, proxy_port)
         return configured_port
     end
     return proxy_port + 1
+end
+
+# Non-blocking single accept that never throws: polled socket or -1.
+function accept_one(listen_sock)
+    if listen_sock < 0
+        return -1
+    end
+    if net::tcp_poll(listen_sock, 0) != 1
+        return -1
+    end
+    let sock = -1
+    try
+        sock = net::tcp_accept(listen_sock)
+    catch accept_err
+        sock = -1
+    end
+    return sock
 end
 
 # Dials the VPN server once. net::tcp_connect throws on hard failures
@@ -190,8 +208,25 @@ function vpn_run_client_proxy(cfg)
             end
     end
 
-    let proxy_sock = alya_vpn_tcp_listen(bind_address, local_port, 128)
-    if proxy_sock < 0
+    # Dual-stack listen: IPv6 companion derived from the IPv4 bind
+    # ("127.0.0.1" -> "::1", "0.0.0.0" -> "::", explicit v6 used as-is).
+    # An explicit IPv6 bind skips the IPv4 socket entirely.
+    let colon_idx = proto::find_char(bind_address, ":")
+    let bind6 = "::1"
+    if bind_address == "0.0.0.0"
+        bind6 = "::"
+    else if colon_idx >= 0
+        bind6 = bind_address
+    end
+    let proxy_sock = -1
+    if colon_idx < 0
+        proxy_sock = alya_vpn_tcp_listen(bind_address, local_port, 128)
+    end
+    let proxy_sock6 = alya_vpn_tcp_listen6(bind6, local_port, 128)
+    if proxy_sock6 < 0
+        say("[INFO] IPv6 proxy unavailable, continuing with IPv4 only")
+    end
+    if proxy_sock < 0 and proxy_sock6 < 0
         say("[ERROR] Failed to start local SOCKS5 proxy on " + bind_address + ":" + local_port)
         tpool::thread_pool_shutdown()
         return 1
@@ -236,6 +271,9 @@ function vpn_run_client_proxy(cfg)
     say("[INFO] ========================================")
     say("[INFO] Alya VPN Client Active")
     say("[INFO] Local SOCKS5 Proxy: " + bind_address + ":" + local_port)
+    if proxy_sock6 >= 0
+        say("[INFO] Local SOCKS5 Proxy (IPv6): [" + bind6 + "]:" + local_port)
+    end
     say("[INFO] Remote VPN Server:  " + server_host + ":" + server_port)
     say("[INFO] Split Tunnel Mode:  " + mode_str)
     let proto_str = when forward_protocol
@@ -246,6 +284,10 @@ function vpn_run_client_proxy(cfg)
     say("[INFO] Forward Protocol:  " + proto_str)
     if udp_relay_port > 0
         say("[INFO] UDP Relay:          " + bind_address + ":" + udp_relay_port + " (SOCKS5 UDP ASSOCIATE)")
+    end
+    let udp_relay6_port = alya_vpn_udp_relay_port6()
+    if udp_relay6_port > 0
+        say("[INFO] UDP Relay (IPv6):     port " + udp_relay6_port + " (SOCKS5 UDP ASSOCIATE)")
     end
     say("[INFO] DNS Protection:     " + dns_str)
     say("[INFO] LAN Traffic:        " + lan_str)
@@ -302,11 +344,27 @@ function vpn_run_client_proxy(cfg)
 
         let activity = 0
 
-        # 1. Accept new local SOCKS5 connections (non-blocking)
-        let poll_proxy = net::tcp_poll(proxy_sock, 0)
+        # 1. Accept new local SOCKS5 connections (non-blocking, either
+        # family; IPv6 first so ::1 apps never starve behind IPv4 bursts)
+        let poll_proxy = 0
+        let v6_sock = accept_one(proxy_sock6)
+        if v6_sock < 0
+            if proxy_sock >= 0
+                poll_proxy = net::tcp_poll(proxy_sock, 0)
+            end
+        else
+            poll_proxy = 1
+        end
         if poll_proxy == 1
             activity = 1
-            let app_sock = net::tcp_accept(proxy_sock)
+            let app_sock = v6_sock
+            if app_sock < 0
+                try
+                    app_sock = net::tcp_accept(proxy_sock)
+                catch accept_err
+                    app_sock = -1
+                end
+            end
             if app_sock >= 0
                 let peer_port = net::tcp_peer_port(app_sock)
                 let proc_buf = "" + crypto::alloc_str(260)
@@ -337,7 +395,7 @@ function vpn_run_client_proxy(cfg)
                             end
                         end
 
-                        if host == "127.0.0.1" or host == "localhost" or host == "::1"
+                        if host == "127.0.0.1" or host == "localhost" or host == "::1" or host == "::ffff:127.0.0.1"
                             route_vpn = 0
                         else
                             let host_route = alya_vpn_should_route_host(host, port)
@@ -436,7 +494,12 @@ function vpn_run_client_proxy(cfg)
     end
 
     net::tcp_close(vpn_sock)
-    net::tcp_close(proxy_sock)
+    if proxy_sock >= 0
+        net::tcp_close(proxy_sock)
+    end
+    if proxy_sock6 >= 0
+        net::tcp_close(proxy_sock6)
+    end
     alya_vpn_udp_clear()
     tpool::thread_pool_shutdown()
 

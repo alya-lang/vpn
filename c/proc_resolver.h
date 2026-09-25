@@ -87,6 +87,13 @@ int  alya_vpn_get_server_log_connections(void);
 // Cross-platform custom TCP listen (supports specific bind IP: 127.0.0.1, 0.0.0.0, etc.)
 int  alya_vpn_tcp_listen(const char *bind_addr, int port, int backlog);
 
+// IPv6 twin: AF_INET6 with IPV6_V6ONLY forced on (never overlaps IPv4).
+// Returns the listen socket, or -1 when IPv6 is unavailable.
+int  alya_vpn_tcp_listen6(const char *bind_addr6, int port, int backlog);
+
+// Bound port of a listen socket (either family), or -1.
+int  alya_vpn_tcp_bound_port(int sock);
+
 // Forward protocol mode: 1 = TCP only, 2 = UDP only, 3 = both (default).
 // Controls which forwarded payload types are allowed; the tunnel itself
 // always runs over TCP. UDP is carried as UDP-over-TCP datagrams.
@@ -98,6 +105,7 @@ int  alya_vpn_get_forward_protocol(void);
 // The handshake reports this port in UDP ASSOCIATE replies.
 int  alya_vpn_udp_relay_init(const char *bind_addr, int port);
 int  alya_vpn_udp_relay_port(void);
+int  alya_vpn_udp_relay_port6(void);
 // Relay -> tunnel (+ direct bypass) pump. Returns 1 on activity, 0 when idle.
 int64_t alya_vpn_pump_client_udp_out(int vpn_sock);
 // Tears down associations, mappings and the relay socket.

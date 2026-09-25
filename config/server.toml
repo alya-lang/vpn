@@ -14,6 +14,8 @@
 
 [server]
 # Local interface to listen on. "0.0.0.0" = all interfaces (VPS default).
+# Dual-stack: IPv6 listens too ("::" next to 0.0.0.0, so the tunnel is also
+# reachable over the VPS IPv6 address). An IPv6 literal binds v6 only.
 # Alias: bind_ip.
 bind_address = "0.0.0.0"
 

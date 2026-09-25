@@ -14,6 +14,9 @@
 # Local interface for the SOCKS5 proxy.
 # "127.0.0.1" = this machine only. "0.0.0.0" = share on your LAN (then
 # anyone on your network can use your tunnel; protect with firewall rules).
+# Dual-stack: an IPv6 companion always listens too ("::1" for loopback,
+# "::" for 0.0.0.0, or the address itself when an IPv6 literal is given,
+# in which case IPv4 is skipped). Apps dialing [::1]:port just work.
 # Aliases: bind_ip.
 bind_address = "127.0.0.1"
 

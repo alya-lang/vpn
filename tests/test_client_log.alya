@@ -13,6 +13,7 @@ function main()
     runner_assert_eq(r, proxy::udp_relay_select(0, 1080), 1081, "Auto relay port is proxy+1")
     runner_assert_eq(r, proxy::udp_relay_select(-5, 1080), 1081, "Negative relay port falls back to proxy+1")
     runner_assert_eq(r, proxy::udp_relay_select(1181, 1080), 1181, "Explicit relay port wins")
+    runner_assert_eq(r, proxy::accept_one(-1), -1, "accept_one on invalid socket yields -1")
 
     let failed = runner_summary(r)
     if failed > 0

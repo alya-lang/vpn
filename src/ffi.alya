@@ -54,6 +54,8 @@ extern "C"
 
     # Custom TCP listen (specific bind IP: 127.0.0.1, 0.0.0.0, etc.)
     function alya_vpn_tcp_listen(bind_addr: str, port: i32, backlog: i32) -> i32
+    function alya_vpn_tcp_listen6(bind_addr6: str, port: i32, backlog: i32) -> i32
+    function alya_vpn_tcp_bound_port(sock: i32) -> i32
 
     # Forward protocol mode: 1 = TCP only, 2 = UDP only, 3 = both
     function alya_vpn_set_forward_protocol(mode: i32) -> void
@@ -62,6 +64,7 @@ extern "C"
     # Client UDP relay (SOCKS5 UDP ASSOCIATE endpoint, UDP-over-TCP tunnel)
     function alya_vpn_udp_relay_init(bind_addr: str, port: i32) -> i32
     function alya_vpn_udp_relay_port() -> i32
+    function alya_vpn_udp_relay_port6() -> i32
     function alya_vpn_pump_client_udp_out(vpn_sock: i32) -> i64
     function alya_vpn_udp_clear() -> void
     function alya_vpn_udp_resync() -> void

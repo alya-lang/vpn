@@ -8,6 +8,60 @@ import "../common/protocol.alya" as proto
 import "../common/thread_pool.alya" as tpool
 import "../ffi.alya"
 
+# Polls one listen socket and dispatches a single pending client connection.
+# Returns 1 when a connection was accepted, else 0.
+function server_poll_accept(listen_sock, timeout_ms, allowed_clients, max_clients, log_client_events, client_thread_handler)
+    if listen_sock < 0
+        return 0
+    end
+    if net::tcp_poll(listen_sock, timeout_ms) != 1
+        return 0
+    end
+    let client_sock = -1
+    try
+        client_sock = net::tcp_accept(listen_sock)
+    catch accept_err
+        client_sock = -1
+    end
+    if client_sock < 0
+        return 0
+    end
+    let client_ip = net::tcp_peer_ip(client_sock)
+    let client_port = net::tcp_peer_port(client_sock)
+
+    # Check IP whitelist if configured
+    let allowed = 1
+    if len(allowed_clients) > 0
+        allowed = 0
+        let aci = 0
+        while aci < len(allowed_clients)
+            if allowed_clients[aci] == client_ip
+                allowed = 1
+                break
+            end
+            aci += 1
+        end
+    end
+
+    if allowed == 0
+        say("[WARN] Connection rejected from unauthorized client: " + client_ip)
+        net::tcp_close(client_sock)
+    else
+        # Atomically enforce max clients limit
+        if alya_vpn_srv_client_connected() == 0
+            say("[WARN] Connection rejected: server reached maximum capacity (" + max_clients + " clients)")
+            net::tcp_close(client_sock)
+        else
+            if log_client_events == 1
+                say("[INFO] Client connected from " + client_ip + ":" + client_port + " (" + alya_vpn_srv_get_active_clients() + "/" + max_clients + " active)")
+            end
+            # Spawn via handler supplied by the importing entrypoint.
+            thread::thread_spawn(client_thread_handler, client_sock)
+        end
+    end
+    return 1
+end
+
 function vpn_run_server(cfg, client_thread_handler)
     let listen_port = cfg["port"]
     let passphrase = cfg["passphrase"]
@@ -51,8 +105,24 @@ function vpn_run_server(cfg, client_thread_handler)
         bpi += 1
     end
 
-    let server_sock = alya_vpn_tcp_listen(bind_address, listen_port, backlog)
-    if server_sock < 0
+    # Dual-stack listen: IPv6 companion derived from the IPv4 bind
+    # ("0.0.0.0" -> "::", explicit v6 used as-is). Explicit IPv6 skips IPv4.
+    let bind_is_v6 = proto::find_char(bind_address, ":") >= 0
+    let bind6 = "::1"
+    if bind_address == "0.0.0.0"
+        bind6 = "::"
+    else if bind_is_v6
+        bind6 = bind_address
+    end
+    let server_sock = -1
+    if bind_is_v6 == false
+        server_sock = alya_vpn_tcp_listen(bind_address, listen_port, backlog)
+    end
+    let server_sock6 = alya_vpn_tcp_listen6(bind6, listen_port, backlog)
+    if server_sock6 < 0
+        say("[INFO] IPv6 listener unavailable, continuing with IPv4 only")
+    end
+    if server_sock < 0 and server_sock6 < 0
         say("[ERROR] Failed to bind VPN server to " + bind_address + ":" + listen_port)
         tpool::thread_pool_shutdown()
         return 1
@@ -81,6 +151,9 @@ function vpn_run_server(cfg, client_thread_handler)
 
     say("[INFO] ========================================")
     say("[INFO] Alya VPN Server running on " + bind_address + ":" + listen_port)
+    if server_sock6 >= 0
+        say("[INFO] Alya VPN Server also listening on [" + bind6 + "]:" + listen_port + " (IPv6)")
+    end
     say("[INFO] Encryption:      ChaCha20-Poly1305 AEAD (256-bit)")
     say("[INFO] Backlog:         " + backlog + " pending connections")
     say("[INFO] Max Clients:     " + max_clients + " concurrent")
@@ -103,51 +176,12 @@ function vpn_run_server(cfg, client_thread_handler)
     let last_stats_ms = alya_vpn_get_time_ms()
 
     while 1
-        # Poll for new client connection (500ms timeout)
-        let poll_res = net::tcp_poll(server_sock, 500)
-        if poll_res == 1
-            # Guarded: a throwing accept must not kill a server carrying
-            # live client threads.
-            let client_sock = -1
-            try
-                client_sock = net::tcp_accept(server_sock)
-            catch accept_err
-                client_sock = -1
-            end
-            if client_sock >= 0
-                let client_ip = net::tcp_peer_ip(client_sock)
-                let client_port = net::tcp_peer_port(client_sock)
-
-                # Check IP whitelist if configured
-                let allowed = 1
-                if len(allowed_clients) > 0
-                    allowed = 0
-                    let aci = 0
-                    while aci < len(allowed_clients)
-                        if allowed_clients[aci] == client_ip
-                            allowed = 1
-                            break
-                        end
-                        aci += 1
-                    end
-                end
-
-                if allowed == 0
-                    say("[WARN] Connection rejected from unauthorized client: " + client_ip)
-                    net::tcp_close(client_sock)
-                else
-                    # Atomically enforce max clients limit
-                    if alya_vpn_srv_client_connected() == 0
-                        say("[WARN] Connection rejected: server reached maximum capacity (" + max_clients + " clients)")
-                        net::tcp_close(client_sock)
-                    else
-                        if log_client_events == 1
-                            say("[INFO] Client connected from " + client_ip + ":" + client_port + " (" + alya_vpn_srv_get_active_clients() + "/" + max_clients + " active)")
-                        end
-                        # Spawn via handler supplied by the importing entrypoint.
-                        thread::thread_spawn(client_thread_handler, client_sock)
-                    end
-                end
+        # IPv4 listener blocks up to 500ms; IPv6 backlog drains without blocking.
+        server_poll_accept(server_sock, 500, allowed_clients, max_clients, log_client_events, client_thread_handler)
+        if server_sock6 >= 0
+            let drained = 1
+            while drained == 1
+                drained = server_poll_accept(server_sock6, 0, allowed_clients, max_clients, log_client_events, client_thread_handler)
             end
         end
 
@@ -161,7 +195,12 @@ function vpn_run_server(cfg, client_thread_handler)
         end
     end
 
-    net::tcp_close(server_sock)
+    if server_sock >= 0
+        net::tcp_close(server_sock)
+    end
+    if server_sock6 >= 0
+        net::tcp_close(server_sock6)
+    end
     tpool::thread_pool_shutdown()
     return 0
 end

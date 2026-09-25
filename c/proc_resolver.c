@@ -961,7 +961,7 @@ static void set_socket_timeout(int sock, int timeout_ms) {
 }
 
 int alya_vpn_tcp_listen(const char *bind_addr, int port, int backlog) {
-    if (port <= 0 || port >= 65536) return -1;
+    if (port < 0 || port >= 65536) return -1;
     if (backlog <= 0) backlog = 128;
 
     int s = (int)socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
@@ -1005,6 +1005,66 @@ int alya_vpn_tcp_listen(const char *bind_addr, int port, int backlog) {
     set_sock_nonblocking(s);
     apply_socket_nodelay(s);
     return s;
+}
+
+// IPv6 twin of alya_vpn_tcp_listen: AF_INET6 with IPV6_V6ONLY forced on,
+// so it never overlaps the IPv4 listener (same port, both families).
+// Returns the listen socket, or -1 when IPv6 is unavailable.
+int alya_vpn_tcp_listen6(const char *bind_addr6, int port, int backlog) {
+    if (port < 0 || port >= 65536) return -1;
+    if (backlog <= 0) backlog = 128;
+
+    int s = (int)socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    if (s < 0) return -1;
+
+    int v6only = 1;
+    setsockopt((SOCKET)s, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&v6only, sizeof(v6only));
+#if !defined(_WIN32)
+    int opt = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#else
+    BOOL opt = TRUE;
+    setsockopt((SOCKET)s, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
+#endif
+
+    struct sockaddr_in6 addr6;
+    memset(&addr6, 0, sizeof(addr6));
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_port = htons((uint16_t)port);
+    if (!bind_addr6 || !bind_addr6[0] || strcmp(bind_addr6, "::") == 0) {
+        addr6.sin6_addr = in6addr_any;
+    } else if (inet_pton(AF_INET6, bind_addr6, &addr6.sin6_addr) != 1) {
+        close_sock(s);
+        return -1;
+    }
+
+    if (bind((SOCKET)s, (struct sockaddr *)&addr6, sizeof(addr6)) != 0) {
+        close_sock(s);
+        return -1;
+    }
+
+    if (listen((SOCKET)s, backlog) != 0) {
+        close_sock(s);
+        return -1;
+    }
+
+    set_sock_nonblocking(s);
+    apply_socket_nodelay(s);
+    return s;
+}
+
+// Returns the bound port of a listen socket, or -1. Works for both families.
+int alya_vpn_tcp_bound_port(int sock) {
+    if (sock < 0) return -1;
+    struct sockaddr_storage addr;
+    socklen_t alen = sizeof(addr);
+    if (getsockname((SOCKET)sock, (struct sockaddr *)&addr, &alen) != 0) return -1;
+    if (addr.ss_family == AF_INET) {
+        return (int)ntohs(((struct sockaddr_in *)&addr)->sin_port);
+    } else if (addr.ss_family == AF_INET6) {
+        return (int)ntohs(((struct sockaddr_in6 *)&addr)->sin6_port);
+    }
+    return -1;
 }
 
 static int s_srv_log_connections = 1;
@@ -1159,9 +1219,12 @@ void alya_vpn_stats_reset(void) {
 // (relay socket globals, protocol-mode check, association registry).
 static int s_udp_relay_sock;
 static int s_udp_relay_port;
+static int s_udp_relay_sock6;
+static int s_udp_relay_port6;
 static int fwd_allows_udp(void);
 static uint32_t assoc_hold(int ctrl_sock);
 static int is_would_block(void);
+static int sock_local_family(int sock);
 
 // Deadline-based receive for handshakes. The Alya runtime hands us accepted
 // sockets that may already be non-blocking, in which case SO_RCVTIMEO is
@@ -1196,7 +1259,8 @@ static int handshake_recv(int sock, unsigned char *buf, int maxlen, int min_need
     return total;
 }
 
-int alya_vpn_socks5_handshake(int client_sock, char *out_host, int max_host_len) {    if (!out_host || max_host_len < 16) return -1;
+int alya_vpn_socks5_handshake(int client_sock, char *out_host, int max_host_len) {
+    if (!out_host || max_host_len < 16) return -1;
 
     apply_socket_nodelay(client_sock);
     set_socket_timeout(client_sock, s_handshake_timeout_ms);
@@ -1253,17 +1317,31 @@ int alya_vpn_socks5_handshake(int client_sock, char *out_host, int max_host_len)
         // CMD 0x03: UDP ASSOCIATE (RFC 1928). The relay address is returned
         // and the TCP connection is held open as the association control
         // channel (owned by C from here on). Returns -2 as sentinel.
+        // The relay matching the control connection's family is reported,
+        // so IPv6 apps get a usable [::1]:port endpoint.
         if (req[1] == 0x03) {
-            if (s_udp_relay_sock < 0 || s_udp_relay_port <= 0 || !fwd_allows_udp()) {
-                printf("[UDP-DBG] ASSOCIATE reject: relay_sock=%d relay_port=%d allows_udp=%d\n", s_udp_relay_sock, s_udp_relay_port, fwd_allows_udp()); fflush(stdout);
+            int ctrl_fam = sock_local_family(client_sock);
+            if (ctrl_fam != AF_INET6) ctrl_fam = AF_INET;
+            int rsock = (ctrl_fam == AF_INET6) ? s_udp_relay_sock6 : s_udp_relay_sock;
+            int rport = (ctrl_fam == AF_INET6) ? s_udp_relay_port6 : s_udp_relay_port;
+            if (rsock < 0 || rport <= 0 || !fwd_allows_udp()) {
+                printf("[UDP-DBG] ASSOCIATE reject: relay_sock=%d relay_port=%d allows_udp=%d\n", rsock, rport, fwd_allows_udp()); fflush(stdout);
                 const unsigned char fail_resp[10] = {0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0};
                 send((SOCKET)client_sock, (const char *)fail_resp, 10, 0);
                 return -1;
             }
-            unsigned char ok_resp[10] = {0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 0};
-            ok_resp[8] = (unsigned char)((s_udp_relay_port >> 8) & 0xFF);
-            ok_resp[9] = (unsigned char)(s_udp_relay_port & 0xFF);
-            send((SOCKET)client_sock, (const char *)ok_resp, 10, 0);
+            if (ctrl_fam == AF_INET6) {
+                unsigned char ok6[22] = {0x05, 0x00, 0x00, 0x04,
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0};
+                ok6[20] = (unsigned char)((rport >> 8) & 0xFF);
+                ok6[21] = (unsigned char)(rport & 0xFF);
+                send((SOCKET)client_sock, (const char *)ok6, 22, 0);
+            } else {
+                unsigned char ok_resp[10] = {0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 0};
+                ok_resp[8] = (unsigned char)((rport >> 8) & 0xFF);
+                ok_resp[9] = (unsigned char)(rport & 0xFF);
+                send((SOCKET)client_sock, (const char *)ok_resp, 10, 0);
+            }
             set_sock_nonblocking(client_sock);
             if (assoc_hold(client_sock) == 0) return -1;
             snprintf(out_host, (size_t)max_host_len, "%s", "udp.associate");
@@ -1654,14 +1732,16 @@ static int is_lan_target(const char *host) {
     }
 
     // IPv6 private & special ranges (hex, case-insensitive):
-    // fc00::/7 (here: fc/fd prefix) = Unique Local, fe80::/10 = link-local.
+    // fc00::/7 (here: fc/fd prefix) = Unique Local, fe80::/10 = link-local,
+    // fec0::/10 = deprecated site-local (still non-public).
     if ((tolower((unsigned char)host[0]) == 'f') &&
         (tolower((unsigned char)host[1]) == 'c' || tolower((unsigned char)host[1]) == 'd')) return 1;
     if (strlen(host) >= 3) {
         char h0 = tolower((unsigned char)host[0]);
         char h1 = tolower((unsigned char)host[1]);
         char h2 = tolower((unsigned char)host[2]);
-        if (h0 == 'f' && h1 == 'e' && (h2 == '8' || h2 == '9' || h2 == 'a' || h2 == 'b')) return 1;
+        if (h0 == 'f' && h1 == 'e' && (h2 == '8' || h2 == '9' || h2 == 'a' || h2 == 'b' ||
+                                       h2 == 'c' || h2 == 'd' || h2 == 'e' || h2 == 'f')) return 1;
     }
     return 0;
 }
@@ -1833,9 +1913,11 @@ int alya_vpn_should_route_host(const char *host, int port) {
     if (s_split_mode == 0) return 1; // route all
     if (!host || !host[0]) return -1;
 
-    // 1. Local loopback must ALWAYS bypass VPN
+    // 1. Local loopback must ALWAYS bypass VPN (incl. v4-mapped form
+    // some dual stacks report for 127.0.0.1 peers).
     if (strcmp(host, "127.0.0.1") == 0 || strcmp(host, "localhost") == 0 ||
-        strcmp(host, "::1") == 0 || strcmp(host, "0.0.0.0") == 0) {
+        strcmp(host, "::1") == 0 || strcmp(host, "0.0.0.0") == 0 ||
+        strcmp(host, "::ffff:127.0.0.1") == 0) {
         return 0;
     }
 
@@ -2615,6 +2697,58 @@ static int udp_bind_socket(const char *bind_addr, int port) {
     return s;
 }
 
+// IPv6 twin with IPV6_V6ONLY forced on (never overlaps the IPv4 relay).
+static int udp_bind_socket6(const char *bind_addr6, int port) {
+    int s = (int)socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP);
+    if (s < 0) return -1;
+    int v6only = 1;
+    setsockopt((SOCKET)s, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&v6only, sizeof(v6only));
+#if !defined(_WIN32)
+    int opt = 1;
+    setsockopt(s, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#endif
+    struct sockaddr_in6 addr6;
+    memset(&addr6, 0, sizeof(addr6));
+    addr6.sin6_family = AF_INET6;
+    addr6.sin6_port = htons((uint16_t)port);
+    if (!bind_addr6 || !bind_addr6[0] || strcmp(bind_addr6, "::") == 0) {
+        addr6.sin6_addr = in6addr_any;
+    } else if (inet_pton(AF_INET6, bind_addr6, &addr6.sin6_addr) != 1) {
+        close_sock(s);
+        return -1;
+    }
+    if (bind((SOCKET)s, (struct sockaddr *)&addr6, sizeof(addr6)) != 0) {
+        close_sock(s);
+        return -1;
+    }
+    set_sock_nonblocking(s);
+    return s;
+}
+
+// Bound port of a datagram socket (either family), or -1.
+static int udp_sock_port(int sock) {
+    if (sock < 0) return -1;
+    struct sockaddr_storage addr;
+    socklen_t alen = sizeof(addr);
+    if (getsockname((SOCKET)sock, (struct sockaddr *)&addr, &alen) != 0) return -1;
+    if (addr.ss_family == AF_INET) {
+        return (int)ntohs(((struct sockaddr_in *)&addr)->sin_port);
+    } else if (addr.ss_family == AF_INET6) {
+        return (int)ntohs(((struct sockaddr_in6 *)&addr)->sin6_port);
+    }
+    return -1;
+}
+
+// Address family of a socket's LOCAL endpoint (AF_INET / AF_INET6 / -1).
+static int sock_local_family(int sock) {
+    if (sock < 0) return -1;
+    struct sockaddr_storage addr;
+    socklen_t alen = sizeof(addr);
+    if (getsockname((SOCKET)sock, (struct sockaddr *)&addr, &alen) != 0) return -1;
+    if (addr.ss_family == AF_INET || addr.ss_family == AF_INET6) return (int)addr.ss_family;
+    return -1;
+}
+
 // Connected (filtered) UDP socket to a resolved target. Returns sock or -1.
 static int connect_udp_target(const char *host, int port) {
     char port_str[16];
@@ -2693,14 +2827,20 @@ static int socks5_udp_build(uint8_t *out, int max_out, const char *host, int por
     if (!out || !host || !data || dlen < 0) return -1;
     unsigned int a, b, c, d;
     int is_v4 = (sscanf(host, "%u.%u.%u.%u", &a, &b, &c, &d) == 4 && a < 256 && b < 256 && c < 256 && d < 256);
+    struct in6_addr a6;
+    int is_v6 = (!is_v4 && inet_pton(AF_INET6, host, &a6) == 1);
     int hlen = (int)strlen(host);
-    int need = is_v4 ? (4 + 4 + 2 + dlen) : (4 + 1 + hlen + 2 + dlen);
+    int need = is_v4 ? (4 + 4 + 2 + dlen) : (is_v6 ? (4 + 16 + 2 + dlen) : (4 + 1 + hlen + 2 + dlen));
     if (hlen <= 0 || hlen > 255 || need > max_out) return -1;
     out[0] = 0; out[1] = 0; out[2] = 0;
     int off = 3;
     if (is_v4) {
         out[off++] = 1;
         out[off++] = (uint8_t)a; out[off++] = (uint8_t)b; out[off++] = (uint8_t)c; out[off++] = (uint8_t)d;
+    } else if (is_v6) {
+        out[off++] = 4;
+        memcpy(out + off, &a6, 16);
+        off += 16;
     } else {
         out[off++] = 3;
         out[off++] = (uint8_t)hlen;
@@ -2735,13 +2875,15 @@ typedef struct {
     uint32_t assoc_id;
     char target_host[256];
     int target_port;
-    struct sockaddr_in app_src; // where to deliver replies
+    struct sockaddr_storage app_src; // where to deliver replies (either family)
+    socklen_t app_src_len;
     uint32_t last_activity_ms;
 } AlyaClientUdpEntry;
 
 typedef struct {
     int in_use;
-    struct sockaddr_in app_src;
+    struct sockaddr_storage app_src;
+    socklen_t app_src_len;
     char target_host[256];
     int target_port;
     int udp_sock; // connected UDP socket for direct (bypass) forwarding
@@ -2750,6 +2892,8 @@ typedef struct {
 
 static int s_udp_relay_sock = -1;
 static int s_udp_relay_port = -1;
+static int s_udp_relay_sock6 = -1;
+static int s_udp_relay_port6 = -1;
 static AlyaAssocEntry s_assocs[ALYA_MAX_ASSOC];
 static AlyaClientUdpEntry s_client_udp[ALYA_MAX_UDP_CH];
 static AlyaDirectUdpEntry s_direct_udp[ALYA_MAX_UDP_CH];
@@ -2757,23 +2901,108 @@ static uint32_t s_next_assoc_id = 1;
 static uint64_t s_udp_tx_drops = 0;
 
 int alya_vpn_udp_relay_init(const char *bind_addr, int port) {
-    if (s_udp_relay_sock >= 0) return s_udp_relay_port;
-    int s = udp_bind_socket(bind_addr, port);
-    if (s < 0 && port != 0) s = udp_bind_socket(bind_addr, 0); // ephemeral fallback
-    if (s < 0) return -1;
-    struct sockaddr_in bound;
-    socklen_t blen = sizeof(bound);
-    if (getsockname((SOCKET)s, (struct sockaddr *)&bound, &blen) == 0) {
-        s_udp_relay_port = (int)ntohs(bound.sin_port);
-    } else {
-        s_udp_relay_port = port;
+    if (s_udp_relay_sock >= 0 || s_udp_relay_sock6 >= 0) {
+        return (s_udp_relay_port > 0) ? s_udp_relay_port : s_udp_relay_port6;
     }
-    s_udp_relay_sock = s;
-    return s_udp_relay_port;
+    // Bind plan per family. Loopback and wildcard get both stacks (separate
+    // sockets: a dual socket bound to ::1 would NOT receive 127.0.0.1);
+    // specific addresses bind their own family only.
+    const char *v4bind = NULL;
+    const char *v6bind = NULL;
+    int want6 = (bind_addr && strchr(bind_addr, ':') != NULL);
+    if (!bind_addr || !bind_addr[0] || strcmp(bind_addr, "0.0.0.0") == 0) {
+        v4bind = "0.0.0.0";
+        v6bind = "::";
+    } else if (strcmp(bind_addr, "127.0.0.1") == 0 || strcmp(bind_addr, "localhost") == 0) {
+        v4bind = "127.0.0.1";
+        v6bind = "::1";
+    } else if (want6) {
+        v6bind = bind_addr;
+    } else {
+        v4bind = bind_addr;
+    }
+    if (v4bind) {
+        int s = udp_bind_socket(v4bind, port);
+        if (s < 0 && port != 0) s = udp_bind_socket(v4bind, 0); // ephemeral fallback
+        if (s >= 0) {
+            s_udp_relay_sock = s;
+            s_udp_relay_port = udp_sock_port(s);
+            if (s_udp_relay_port <= 0) s_udp_relay_port = port;
+        }
+    }
+    if (v6bind) {
+        int want_port = (s_udp_relay_port > 0) ? s_udp_relay_port : port;
+        int s6 = udp_bind_socket6(v6bind, want_port);
+        if (s6 < 0) s6 = udp_bind_socket6(v6bind, 0); // ephemeral fallback
+        if (s6 >= 0) {
+            s_udp_relay_sock6 = s6;
+            s_udp_relay_port6 = udp_sock_port(s6);
+            if (s_udp_relay_port6 <= 0) s_udp_relay_port6 = want_port;
+        }
+    }
+    if (s_udp_relay_sock < 0 && s_udp_relay_sock6 < 0) return -1;
+    return (s_udp_relay_port > 0) ? s_udp_relay_port : s_udp_relay_port6;
 }
 
 int alya_vpn_udp_relay_port(void) {
     return s_udp_relay_port;
+}
+
+int alya_vpn_udp_relay_port6(void) {
+    return s_udp_relay_port6;
+}
+
+// Source port of a datagram peer in host order (either family), else 0.
+static int udp_src_port(const struct sockaddr_storage *src) {
+    if (!src) return 0;
+    if (src->ss_family == AF_INET) {
+        return (int)ntohs(((const struct sockaddr_in *)src)->sin_port);
+    }
+    if (src->ss_family == AF_INET6) {
+        return (int)ntohs(((const struct sockaddr_in6 *)src)->sin6_port);
+    }
+    return 0;
+}
+
+// Copies a datagram peer address, truncating defensively.
+static void udp_peer_copy(struct sockaddr_storage *dst, socklen_t *dstlen,
+                          const struct sockaddr_storage *src, socklen_t srclen) {
+    size_t n = (size_t)srclen;
+    if (n > sizeof(*dst)) n = sizeof(*dst);
+    memcpy(dst, src, n);
+    *dstlen = srclen;
+}
+
+// True when two datagram sources are the same peer (family-aware).
+static int same_udp_peer(const struct sockaddr_storage *a, socklen_t alen,
+                         const struct sockaddr_storage *b, socklen_t blen) {
+    (void)alen;
+    (void)blen;
+    if (!a || !b || a->ss_family != b->ss_family) return 0;
+    if (a->ss_family == AF_INET) {
+        const struct sockaddr_in *a4 = (const struct sockaddr_in *)a;
+        const struct sockaddr_in *b4 = (const struct sockaddr_in *)b;
+        return a4->sin_addr.s_addr == b4->sin_addr.s_addr && a4->sin_port == b4->sin_port;
+    }
+    if (a->ss_family == AF_INET6) {
+        const struct sockaddr_in6 *a6 = (const struct sockaddr_in6 *)a;
+        const struct sockaddr_in6 *b6 = (const struct sockaddr_in6 *)b;
+        return a6->sin6_port == b6->sin6_port &&
+               memcmp(&a6->sin6_addr, &b6->sin6_addr, sizeof(a6->sin6_addr)) == 0;
+    }
+    return 0;
+}
+
+// Sends a relay->app datagram through the family-matching relay socket.
+static int relay_send_to(const struct sockaddr_storage *dst, socklen_t dstlen,
+                         const uint8_t *buf, int len) {
+    int fd = -1;
+    if (!dst || !buf || len < 0) return -1;
+    if (dst->ss_family == AF_INET) fd = s_udp_relay_sock;
+    else if (dst->ss_family == AF_INET6) fd = s_udp_relay_sock6;
+    if (fd < 0) return -1;
+    return sendto((SOCKET)fd, (const char *)buf, len, 0,
+                  (const struct sockaddr *)dst, dstlen);
 }
 
 // Registers a SOCKS5 UDP ASSOCIATE control socket. Returns assoc id or 0.
@@ -2826,7 +3055,8 @@ void alya_vpn_udp_resync(void) {
     }
 }
 
-void alya_vpn_udp_clear(void) {    for (int i = 0; i < ALYA_MAX_ASSOC; ++i) {
+void alya_vpn_udp_clear(void) {
+    for (int i = 0; i < ALYA_MAX_ASSOC; ++i) {
         if (s_assocs[i].in_use && s_assocs[i].ctrl_sock >= 0) close_sock(s_assocs[i].ctrl_sock);
     }
     memset(s_assocs, 0, sizeof(s_assocs));
@@ -2836,14 +3066,15 @@ void alya_vpn_udp_clear(void) {    for (int i = 0; i < ALYA_MAX_ASSOC; ++i) {
     }
     memset(s_direct_udp, 0, sizeof(s_direct_udp));
     if (s_udp_relay_sock >= 0) { close_sock(s_udp_relay_sock); s_udp_relay_sock = -1; s_udp_relay_port = -1; }
+    if (s_udp_relay_sock6 >= 0) { close_sock(s_udp_relay_sock6); s_udp_relay_sock6 = -1; s_udp_relay_port6 = -1; }
 }
 
 static AlyaClientUdpEntry *client_udp_find_or_create(uint32_t assoc_id, const char *host, int port,
-                                                     const struct sockaddr_in *src) {
+                                                     const struct sockaddr_storage *src, socklen_t srclen) {
     for (int i = 0; i < ALYA_MAX_UDP_CH; ++i) {
         if (s_client_udp[i].in_use && s_client_udp[i].assoc_id == assoc_id &&
             s_client_udp[i].target_port == port && strcmp(s_client_udp[i].target_host, host) == 0) {
-            s_client_udp[i].app_src = *src;
+            udp_peer_copy(&s_client_udp[i].app_src, &s_client_udp[i].app_src_len, src, srclen);
             s_client_udp[i].last_activity_ms = get_time_ms();
             return &s_client_udp[i];
         }
@@ -2854,7 +3085,7 @@ static AlyaClientUdpEntry *client_udp_find_or_create(uint32_t assoc_id, const ch
             s_client_udp[i].assoc_id = assoc_id;
             strncpy(s_client_udp[i].target_host, host, sizeof(s_client_udp[i].target_host) - 1);
             s_client_udp[i].target_port = port;
-            s_client_udp[i].app_src = *src;
+            udp_peer_copy(&s_client_udp[i].app_src, &s_client_udp[i].app_src_len, src, srclen);
             s_client_udp[i].last_activity_ms = get_time_ms();
             return &s_client_udp[i];
         }
@@ -2862,13 +3093,12 @@ static AlyaClientUdpEntry *client_udp_find_or_create(uint32_t assoc_id, const ch
     return NULL;
 }
 
-static AlyaDirectUdpEntry *direct_udp_find_or_create(const struct sockaddr_in *src,
+static AlyaDirectUdpEntry *direct_udp_find_or_create(const struct sockaddr_storage *src, socklen_t srclen,
                                                      const char *host, int port) {
     for (int i = 0; i < ALYA_MAX_UDP_CH; ++i) {
         if (s_direct_udp[i].in_use && s_direct_udp[i].target_port == port &&
             strcmp(s_direct_udp[i].target_host, host) == 0 &&
-            s_direct_udp[i].app_src.sin_addr.s_addr == src->sin_addr.s_addr &&
-            s_direct_udp[i].app_src.sin_port == src->sin_port) {
+            same_udp_peer(&s_direct_udp[i].app_src, s_direct_udp[i].app_src_len, src, srclen)) {
             s_direct_udp[i].last_activity_ms = get_time_ms();
             return &s_direct_udp[i];
         }
@@ -2878,7 +3108,7 @@ static AlyaDirectUdpEntry *direct_udp_find_or_create(const struct sockaddr_in *s
     for (int i = 0; i < ALYA_MAX_UDP_CH; ++i) {
         if (!s_direct_udp[i].in_use) {
             s_direct_udp[i].in_use = 1;
-            s_direct_udp[i].app_src = *src;
+            udp_peer_copy(&s_direct_udp[i].app_src, &s_direct_udp[i].app_src_len, src, srclen);
             strncpy(s_direct_udp[i].target_host, host, sizeof(s_direct_udp[i].target_host) - 1);
             s_direct_udp[i].target_port = port;
             s_direct_udp[i].udp_sock = s;
@@ -2893,7 +3123,7 @@ static AlyaDirectUdpEntry *direct_udp_find_or_create(const struct sockaddr_in *s
 // Relay -> tunnel (+ direct bypass) pump. Called from the Alya client loop
 // after alya_vpn_pump_client_vpn. Returns 1 on activity, 0 when idle.
 int64_t alya_vpn_pump_client_udp_out(int vpn_sock) {
-    if (s_udp_relay_sock < 0 || !fwd_allows_udp()) return 0;
+    if ((s_udp_relay_sock < 0 && s_udp_relay_sock6 < 0) || !fwd_allows_udp()) return 0;
     int activity = 0;
     uint32_t now = get_time_ms();
     uint32_t idle_ms = udp_effective_idle_ms();
@@ -2931,16 +3161,24 @@ int64_t alya_vpn_pump_client_udp_out(int vpn_sock) {
         }
     }
 
-    // 3. Drain relay datagrams (cap per tick to bound latency)
+    // 3. Drain relay datagrams (cap per tick to bound latency), both families
     static uint8_t rbuf[65535];
     static uint8_t frbuf[ALYA_AV02_HEADER_LEN + 32768];
-    for (int iter = 0; iter < 32; ++iter) {
-        struct sockaddr_in src;
+    for (int ri = 0; ri < 2; ++ri) {
+        int rfd = (ri == 0) ? s_udp_relay_sock : s_udp_relay_sock6;
+        if (rfd < 0) continue;
+        for (int iter = 0; iter < 32; ++iter) {
+        struct sockaddr_storage src;
+        memset(&src, 0, sizeof(src));
         socklen_t slen = sizeof(src);
-        int n = recvfrom((SOCKET)s_udp_relay_sock, (char *)rbuf, sizeof(rbuf), 0,
+        int n = recvfrom((SOCKET)rfd, (char *)rbuf, sizeof(rbuf), 0,
                          (struct sockaddr *)&src, &slen);
         if (n <= 0) {
-            if (n < 0 && !is_would_block()) return activity;
+            if (n < 0 && !is_would_block()) {
+                close_sock(rfd); // broken socket: drop it, keep pumping
+                if (rfd == s_udp_relay_sock) { s_udp_relay_sock = -1; s_udp_relay_port = -1; }
+                else { s_udp_relay_sock6 = -1; s_udp_relay_port6 = -1; }
+            }
             break;
         }
         activity = 1;
@@ -2957,7 +3195,7 @@ int64_t alya_vpn_pump_client_udp_out(int vpn_sock) {
         else if (hr == 0) decision = 0;
         else {
             char pname[256] = {0};
-            int src_port = (int)ntohs(src.sin_port);
+            int src_port = udp_src_port(&src);
             uint32_t ukey = (uint32_t)(src_port & 0xFFFF);
             if (!route_cache_get(s_udp_cache, ukey, pname, sizeof(pname))) {
                 if (!alya_vpn_get_udp_process_by_port(src_port, pname, sizeof(pname)) || !pname[0]) {
@@ -2969,20 +3207,19 @@ int64_t alya_vpn_pump_client_udp_out(int vpn_sock) {
             decision = alya_vpn_should_route(pname);
         }
 
-        // Find owning association by source port: datagrams arriving at the
+        // Find owning association by source peer: datagrams arriving at the
         // relay without an association are dropped (strict RFC 1928).
         uint32_t assoc_id = 0;
         for (int i = 0; i < ALYA_MAX_UDP_CH; ++i) {
             if (s_client_udp[i].in_use &&
-                s_client_udp[i].app_src.sin_addr.s_addr == src.sin_addr.s_addr &&
-                s_client_udp[i].app_src.sin_port == src.sin_port) {
+                same_udp_peer(&s_client_udp[i].app_src, s_client_udp[i].app_src_len, &src, slen)) {
                 assoc_id = s_client_udp[i].assoc_id;
                 break;
             }
         }
         if (assoc_id == 0) {
             // First datagram of a new (assoc, target): attribute to the most
-            // recently synced association from the same source IP.
+            // recently synced association from the same relay family.
             for (int i = 0; i < ALYA_MAX_ASSOC; ++i) {
                 if (s_assocs[i].in_use && s_assocs[i].synced) { assoc_id = s_assocs[i].assoc_id; break; }
             }
@@ -2991,21 +3228,21 @@ int64_t alya_vpn_pump_client_udp_out(int vpn_sock) {
 
         if (decision == 0) {
             // Direct bypass: forward locally, replies demultiplexed by target.
-            AlyaDirectUdpEntry *de = direct_udp_find_or_create(&src, host, port);
+            AlyaDirectUdpEntry *de = direct_udp_find_or_create(&src, slen, host, port);
             if (de && dglen > 0) {
                 if (send((SOCKET)de->udp_sock, (const char *)dg, dglen, 0) == dglen) {
                     de->last_activity_ms = now;
                     alya_vpn_stats_add_tx((uint32_t)dglen);
                 }
             }
-            if (!client_udp_find_or_create(assoc_id, host, port, &src)) { s_udp_tx_drops++; }
+            if (!client_udp_find_or_create(assoc_id, host, port, &src, slen)) { s_udp_tx_drops++; }
             continue;
         }
 
         if (vpn_sock < 0) continue;
         AlyaAssocEntry *a = assoc_find(assoc_id);
         if (!a || !a->synced) continue;
-        if (!client_udp_find_or_create(assoc_id, host, port, &src)) { s_udp_tx_drops++; continue; }
+        if (!client_udp_find_or_create(assoc_id, host, port, &src, slen)) { s_udp_tx_drops++; continue; }
         uint8_t *pl = frbuf + ALYA_AV02_HEADER_LEN;
         int plw = udp_payload_encode(pl, (int)sizeof(frbuf) - ALYA_AV02_HEADER_LEN, host, port, dg, dglen);
         if (plw < 0) { s_udp_tx_drops++; continue; }
@@ -3013,6 +3250,7 @@ int64_t alya_vpn_pump_client_udp_out(int vpn_sock) {
                                             frbuf, sizeof(frbuf));
         if (flen > 0 && send_all(vpn_sock, frbuf, flen) == flen) {
             alya_vpn_stats_add_tx((uint32_t)dglen);
+        }
         }
     }
 
@@ -3034,8 +3272,7 @@ int64_t alya_vpn_pump_client_udp_out(int vpn_sock) {
             int on = socks5_udp_build(obuf, sizeof(obuf), s_direct_udp[i].target_host,
                                       s_direct_udp[i].target_port, dbuf, n);
             if (on > 0) {
-                sendto((SOCKET)s_udp_relay_sock, (const char *)obuf, on, 0,
-                       (struct sockaddr *)&s_direct_udp[i].app_src, sizeof(s_direct_udp[i].app_src));
+                relay_send_to(&s_direct_udp[i].app_src, s_direct_udp[i].app_src_len, obuf, on);
             }
         } else if (n < 0 && !is_would_block()) {
             close_sock(s_direct_udp[i].udp_sock);
@@ -3055,7 +3292,7 @@ int64_t alya_vpn_pump_client_udp_out(int vpn_sock) {
 
 // Deliver one inbound UDP_DATA payload to the application via the relay.
 static int client_udp_deliver(uint32_t assoc_id, const uint8_t *pl, uint32_t plen) {
-    if (s_udp_relay_sock < 0) return -1;
+    if (s_udp_relay_sock < 0 && s_udp_relay_sock6 < 0) return -1;
     char host[256]; int port = 0;
     const uint8_t *dg = NULL; int dglen = 0;
     if (udp_payload_decode(pl, plen, host, sizeof(host), &port, &dg, &dglen) != 0) return -1;
@@ -3073,8 +3310,7 @@ static int client_udp_deliver(uint32_t assoc_id, const uint8_t *pl, uint32_t ple
     if (on < 0) return -1;
     e->last_activity_ms = get_time_ms();
     alya_vpn_stats_add_rx((uint32_t)dglen);
-    return sendto((SOCKET)s_udp_relay_sock, (const char *)obuf, on, 0,
-                  (struct sockaddr *)&e->app_src, sizeof(e->app_src));
+    return relay_send_to(&e->app_src, e->app_src_len, obuf, on);
 }
 
 // ============================================================================
@@ -3198,6 +3434,7 @@ static int server_target_allowed(const char *target, int port, int is_udp) {
     if (s_srv_block_lan && (is_lan_target(target) ||
              strcmp(target, "127.0.0.1") == 0 || strcmp(target, "localhost") == 0 ||
              strcmp(target, "::1") == 0 || strcmp(target, "0.0.0.0") == 0 ||
+             strcmp(target, "::ffff:127.0.0.1") == 0 ||
              strncmp(target, "169.254.", 8) == 0 || strncmp(target, "10.", 3) == 0 ||
              strncmp(target, "192.168.", 8) == 0 || strncmp(target, "172.", 4) == 0)) return 0;
     return 1;
