@@ -25,7 +25,7 @@ local_proxy_port = 1080
 # (here: 127.0.0.1:1081, ephemeral fallback if occupied).
 
 # Remote VPN server endpoint (the [server] section of server.toml).
-server_host = "YOUR_SERVER_IP"
+server_host = "127.0.0.1"
 # server_host = "127.0.0.1"  # local test server alternative
 server_port = 51822
 
