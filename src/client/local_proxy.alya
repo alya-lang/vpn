@@ -34,6 +34,15 @@ function proc_display_name(proc_name, peer_port)
     return proc_name
 end
 
+# UDP relay port selection: an explicit configured port wins; 0/negative
+# falls back to proxy_port + 1 (the native bind adds ephemeral fallback).
+function udp_relay_select(configured_port, proxy_port)
+    if configured_port > 0
+        return configured_port
+    end
+    return proxy_port + 1
+end
+
 # Dials the VPN server once. net::tcp_connect throws on hard failures
 # (refused/unreachable) instead of returning -1, so the call is guarded
 # and every outcome funnels to a plain socket-or--1 contract.
@@ -167,17 +176,21 @@ function vpn_run_client_proxy(cfg)
     alya_vpn_udp_clear()
 
     # 8. UDP relay for SOCKS5 UDP ASSOCIATE (UDP-over-TCP tunnel).
-    # Disabled in TCP-only mode. Binds proxy_port+1 with ephemeral fallback.
+    # Disabled in TCP-only mode. Port from udp_relay_port setting.
+    let configured_udp_port = cfg["udp_relay_port"]
+    if configured_udp_port == null
+        configured_udp_port = 0
+    end
     let udp_relay_port = -1
     when forward_protocol
         is 2, 3
-            udp_relay_port = alya_vpn_udp_relay_init(bind_address, local_port + 1)
+            udp_relay_port = alya_vpn_udp_relay_init(bind_address, udp_relay_select(configured_udp_port, local_port))
             if udp_relay_port < 0
                 say("[WARN] UDP relay unavailable, continuing with TCP only")
             end
     end
 
-    let proxy_sock = alya_vpn_tcp_listen(bind_address, local_port, 64)
+    let proxy_sock = alya_vpn_tcp_listen(bind_address, local_port, 128)
     if proxy_sock < 0
         say("[ERROR] Failed to start local SOCKS5 proxy on " + bind_address + ":" + local_port)
         tpool::thread_pool_shutdown()

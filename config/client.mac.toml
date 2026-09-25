@@ -1,6 +1,7 @@
 [client]
 bind_address = "127.0.0.1"
 local_proxy_port = 1080
+udp_relay_port = 0
 server_host = "127.0.0.1"
 server_port = 51822
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"

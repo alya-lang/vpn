@@ -174,6 +174,20 @@ To route Discord through Alya VPN:
   (`--server`, `--port`, `--mode`, `--protocol`, `--apps`, `--domains`).
 - Restart Discord AFTER starting the client so it picks up proxy/DNS.
 
+### General use (browsers & other apps)
+
+This VPN is a SOCKS5 proxy, not a TUN device — anything that can point at
+a proxy works, raw UDP/ICMP/ping from proxy-unaware apps does not enter it:
+- Any app: SOCKS5 `127.0.0.1:1080`, or HTTP proxy URL `http://127.0.0.1:1080`
+  (HTTP CONNECT is answered on the same port).
+- Firefox: `socks host 127.0.0.1:1080` (SOCKS v5) + `network.proxy.socks_remote_dns = true`
+  so hostnames resolve through the tunnel instead of local DNS.
+- Chrome/Edge: `--proxy-server='socks5://127.0.0.1:1080'`, or the automatic
+  system proxy. For full tunneling disable QUIC (`chrome://flags` →
+  `#enable-quic` → Disabled), otherwise UDP/443 bypasses the proxy.
+- curl: `curl -x socks5h://127.0.0.1:1080 <url>` (`socks5h` = remote DNS).
+- Prefer DNS-over-HTTPS in browsers; OS-level UDP/53 never enters SOCKS.
+
 ---
 
 ## 🛠️ CLI Reference

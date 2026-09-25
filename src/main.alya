@@ -41,6 +41,7 @@ function print_usage()
     say("    --server <host>           Remote VPN server host (default: 127.0.0.1)")
     say("    --port <port>             Remote VPN server port (default: 51822)")
     say("    --proxy <port>            Local SOCKS5 proxy port (default: 1080)")
+    say("    --udp-port <port>         UDP relay port (default: 0 = proxy_port+1)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
     say("    --protocol <mode>         Forwarded payloads: tcp, udp or both (default: both)")
     say("    --mode <all|inc|exc>      Split-tunnel mode:")
@@ -111,6 +112,7 @@ function load_client_config(config_path)
         "server_host": "127.0.0.1",
         "server_port": 51822,
         "local_port": 1080,
+        "udp_relay_port": 0,
         "bind_address": "127.0.0.1",
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "protocol": "both",
@@ -158,6 +160,8 @@ function load_client_config(config_path)
                 cfg["server_port"] = proto::parse_number(strip_val(val))
             else if key == "local_proxy_port" or key == "local_port"
                 cfg["local_port"] = proto::parse_number(strip_val(val))
+            else if key == "udp_relay_port" or key == "udp_port"
+                cfg["udp_relay_port"] = proto::parse_number(strip_val(val))
             else if key == "bind_address" or key == "bind_ip"
                 cfg["bind_address"] = strip_val(val)
             else if key == "passphrase"
@@ -609,6 +613,7 @@ function main()
         let srv_host = "127.0.0.1"
         let srv_port = 51822
         let proxy_port = 1080
+        let udp_relay_port_cfg = 0
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let split_mode = router::mode_exclude() # Default blacklist
         let forward_protocol_str = "both"
@@ -643,6 +648,9 @@ function main()
             srv_host = file_cfg["server_host"]
             srv_port = file_cfg["server_port"]
             proxy_port = file_cfg["local_port"]
+            if file_cfg["udp_relay_port"] != null and file_cfg["udp_relay_port"] >= 0
+                udp_relay_port_cfg = file_cfg["udp_relay_port"]
+            end
             if file_cfg["bind_address"] != null
                 bind_address = file_cfg["bind_address"]
             end
@@ -730,6 +738,9 @@ function main()
                     srv_host = custom_cfg["server_host"]
                     srv_port = custom_cfg["server_port"]
                     proxy_port = custom_cfg["local_port"]
+                    if custom_cfg["udp_relay_port"] != null and custom_cfg["udp_relay_port"] >= 0
+                        udp_relay_port_cfg = custom_cfg["udp_relay_port"]
+                    end
                     if custom_cfg["bind_address"] != null
                         bind_address = custom_cfg["bind_address"]
                     end
@@ -820,6 +831,9 @@ function main()
                 i += 2
             else if args_list[i] == "--proxy" and i + 1 < len(args_list)
                 proxy_port = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if args_list[i] == "--udp-port" and i + 1 < len(args_list)
+                udp_relay_port_cfg = proto::parse_number(args_list[i + 1])
                 i += 2
             else if (args_list[i] == "--protocol" or args_list[i] == "--proto") and i + 1 < len(args_list)
                 forward_protocol_str = args_list[i + 1]
@@ -972,6 +986,7 @@ function main()
         let client_cfg = {
             "bind_address": bind_address,
             "local_port": proxy_port,
+            "udp_relay_port": udp_relay_port_cfg,
             "server_host": srv_host,
             "server_port": srv_port,
             "passphrase": pass,

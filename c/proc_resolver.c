@@ -1577,13 +1577,64 @@ void alya_vpn_add_custom_lan(const char *range_or_domain) {
 
 static int pattern_match_c(const char *pattern, const char *text);
 
+// Parses dotted IPv4 into host-order uint32. Rejects trailing junk.
+static int parse_ipv4(const char *s, uint32_t *out) {
+    unsigned int a, b, c, d;
+    char extra;
+    if (!s || !out) return 0;
+    if (sscanf(s, "%u.%u.%u.%u%c", &a, &b, &c, &d, &extra) != 4) return 0;
+    if (a > 255 || b > 255 || c > 255 || d > 255) return 0;
+    *out = ((uint32_t)a << 24) | ((uint32_t)b << 16) | ((uint32_t)c << 8) | (uint32_t)d;
+    return 1;
+}
+
+// True when dotted host falls inside "A.B.C.D/N" (N = 0..32).
+static int cidr_contains(const char *cidr, const char *host) {
+    const char *slash;
+    char base[64];
+    size_t blen;
+    uint32_t net, ip;
+    int bits;
+    uint32_t mask;
+    if (!cidr || !host) return 0;
+    slash = strchr(cidr, '/');
+    if (!slash) return 0;
+    blen = (size_t)(slash - cidr);
+    if (blen == 0 || blen >= sizeof(base)) return 0;
+    memcpy(base, cidr, blen);
+    base[blen] = '\0';
+    bits = atoi(slash + 1);
+    if (bits < 0 || bits > 32) return 0;
+    if (!parse_ipv4(base, &net) || !parse_ipv4(host, &ip)) return 0;
+    mask = (bits == 0) ? 0 : (0xFFFFFFFFu << (32 - bits));
+    return (net & mask) == (ip & mask);
+}
+
+// True when host ends with "." + suffix (case-insensitive domain match).
+static int host_has_suffix(const char *host, const char *suffix) {
+    size_t hlen, slen;
+    if (!host || !suffix) return 0;
+    hlen = strlen(host);
+    slen = strlen(suffix);
+    if (slen == 0 || hlen <= slen) return 0;
+    if (host[hlen - slen - 1] != '.') return 0;
+    return ALYA_STRNICMP(host + hlen - slen, suffix, slen) == 0;
+}
+
 static int is_lan_target(const char *host) {
     if (!host || !host[0]) return 0;
 
     if (s_custom_lan_range_count > 0) {
         for (int i = 0; i < s_custom_lan_range_count; ++i) {
-            if (pattern_match_c(s_custom_lan_ranges[i], host)) return 1;
-            if (strncmp(host, s_custom_lan_ranges[i], strlen(s_custom_lan_ranges[i])) == 0) return 1;
+            const char *range = s_custom_lan_ranges[i];
+            if (pattern_match_c(range, host)) return 1;
+            // CIDR notation ("203.0.113.0/24"): real masked compare, so
+            // public subnets can be bypassed while the rest stays tunneled.
+            if (strchr(range, '/') && cidr_contains(range, host)) return 1;
+            // Domain suffix ("corp.internal" also matches "x.corp.internal").
+            if (host_has_suffix(host, range)) return 1;
+            // Plain prefix ("192.168.1." style), kept for back-compat.
+            if (strncmp(host, range, strlen(range)) == 0) return 1;
         }
     }
 
@@ -1600,6 +1651,17 @@ static int is_lan_target(const char *host) {
     if (strncmp(host, "172.", 4) == 0) {
         int sec = atoi(host + 4);
         if (sec >= 16 && sec <= 31) return 1;
+    }
+
+    // IPv6 private & special ranges (hex, case-insensitive):
+    // fc00::/7 (here: fc/fd prefix) = Unique Local, fe80::/10 = link-local.
+    if ((tolower((unsigned char)host[0]) == 'f') &&
+        (tolower((unsigned char)host[1]) == 'c' || tolower((unsigned char)host[1]) == 'd')) return 1;
+    if (strlen(host) >= 3) {
+        char h0 = tolower((unsigned char)host[0]);
+        char h1 = tolower((unsigned char)host[1]);
+        char h2 = tolower((unsigned char)host[2]);
+        if (h0 == 'f' && h1 == 'e' && (h2 == '8' || h2 == '9' || h2 == 'a' || h2 == 'b')) return 1;
     }
     return 0;
 }
@@ -3231,6 +3293,7 @@ int alya_vpn_open_client_channel(int vpn_sock, int channel_id, const char *host,
         return -1;
     }
     if (!fwd_allows_tcp()) return -2; // TCP forwarding disabled by protocol mode
+    if (alya_vpn_ch_count() >= ALYA_MAX_CHANNELS) return -1; // table full: caller closes app socket now instead of orphaning a server-side channel
     set_sock_nonblocking(app_sock);
     set_sock_nonblocking(vpn_sock);
     apply_socket_nodelay(app_sock);
@@ -3589,6 +3652,13 @@ int64_t alya_vpn_pump_server_vpn(int client_sock) {
                     else if (!server_target_allowed(target, port, 0)) {
                         if (s_srv_log_connections) {
                             printf("[SECURITY] Blocked SSRF connection to private LAN destination: Channel %u -> %s:%d\n", out_ch, target, port);
+                            fflush(stdout);
+                        }
+                    // 2b. Capacity check: refuse cleanly instead of orphaning
+                    // a server-side channel with no client mapping.
+                    } else if (alya_vpn_srv_ch_count() >= ALYA_MAX_CHANNELS) {
+                        if (s_srv_log_connections) {
+                            printf("[LIMIT] Channel table full, refused: Channel %u -> %s:%d\n", out_ch, target, port);
                             fflush(stdout);
                         }
                     } else {

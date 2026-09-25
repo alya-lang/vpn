@@ -9,6 +9,7 @@ function routing_reset_neutral()
     alya_vpn_set_routing(0, "")
     alya_vpn_domain_clear()
     alya_vpn_dns_clear()
+    alya_vpn_clear_custom_lan()
     alya_vpn_set_tunnel_dns(1)
     alya_vpn_set_bypass_lan(1)
 end
@@ -68,6 +69,23 @@ function main()
     alya_vpn_set_routing(0, "")
     runner_assert_eq(r, alya_vpn_should_route("anything.exe"), 1, "All mode routes every process via VPN")
     runner_assert_eq(r, alya_vpn_should_route_host("example.com", 80), 1, "All mode routes every host via VPN")
+
+    # 8. Custom bypass ranges: CIDR subnets, domain suffixes, IPv6 ULA.
+    # Default LANs stay on but cannot match these public/test targets.
+    alya_vpn_clear_custom_lan()
+    alya_vpn_add_custom_lan("203.0.113.0/24")
+    alya_vpn_add_custom_lan("vpn-test.invalid")
+    alya_vpn_set_routing(1, "")
+    alya_vpn_domain_clear()
+    runner_assert_eq(r, alya_vpn_should_route_host("203.0.113.44", 443), 0, "CIDR subnet bypasses VPN")
+    runner_assert_eq(r, alya_vpn_should_route_host("203.0.113.0", 443), 0, "CIDR network address bypasses VPN")
+    runner_assert_eq(r, alya_vpn_should_route_host("203.0.114.1", 443), -1, "Outside CIDR defers to process decision")
+    runner_assert_eq(r, alya_vpn_should_route_host("printer.vpn-test.invalid", 80), 0, "Domain suffix bypasses VPN")
+    runner_assert_eq(r, alya_vpn_should_route_host("vpn-test.invalid", 80), 0, "Exact custom domain bypasses VPN")
+    runner_assert_eq(r, alya_vpn_should_route_host("notvpn-test.invalid", 80), -1, "Partial suffix does not bypass")
+    runner_assert_eq(r, alya_vpn_should_route_host("fd12:3456::1", 443), 0, "IPv6 ULA bypasses VPN")
+    runner_assert_eq(r, alya_vpn_should_route_host("FE80::1", 443), 0, "IPv6 link-local bypasses VPN case-insensitively")
+    runner_assert_eq(r, alya_vpn_should_route_host("2001:db8::1", 443), -1, "Global IPv6 defers to process decision")
 
     routing_reset_neutral()
 

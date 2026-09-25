@@ -10,6 +10,9 @@ function main()
     runner_assert_str_eq(r, proxy::proc_display_name("unknown", 1), "unknown:1", "Low peer port formats correctly")
     runner_assert_str_eq(r, proxy::proc_display_name("Discord", 51234), "Discord", "Known process shows bare name")
     runner_assert_str_eq(r, proxy::proc_display_name("Discord Helper (Renderer)", 0), "Discord Helper (Renderer)", "Helper name passes through untouched")
+    runner_assert_eq(r, proxy::udp_relay_select(0, 1080), 1081, "Auto relay port is proxy+1")
+    runner_assert_eq(r, proxy::udp_relay_select(-5, 1080), 1081, "Negative relay port falls back to proxy+1")
+    runner_assert_eq(r, proxy::udp_relay_select(1181, 1080), 1181, "Explicit relay port wins")
 
     let failed = runner_summary(r)
     if failed > 0

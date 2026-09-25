@@ -18,8 +18,16 @@
 bind_address = "127.0.0.1"
 
 # Local SOCKS5 (TCP) listen port. Point apps / OS proxy settings here.
+# It also answers HTTP CONNECT, so apps that only accept an HTTP proxy URL
+# can use http://127.0.0.1:1080 (use the matching port if changed below).
 # Alias: local_port.
 local_proxy_port = 1080
+
+# UDP relay listen port for SOCKS5 UDP ASSOCIATE.
+# 0 = automatic (local_proxy_port + 1, ephemeral fallback on conflict).
+# Set explicitly when the auto port collides or firewall rules need a pin.
+# Aliases: udp_port.
+udp_relay_port = 0
 # NOTE: when protocol includes UDP (default), a UDP relay for SOCKS5
 # UDP ASSOCIATE is opened automatically on local_proxy_port + 1
 # (here: 127.0.0.1:1081, ephemeral fallback if occupied).
@@ -151,8 +159,11 @@ mode = "include"
 # *.home, *.internal. Alias: local_network_bypass.
 bypass_lan = true
 
-# Extra bypass entries (prefix or suffix match) on top of the standard LAN
-# list, e.g. office subnets or NAS hostnames.
+# Extra bypass entries on top of the standard LAN list. Three forms:
+#   "192.168.7.0/24"  - CIDR subnet (masked compare; also public subnets,
+#                       e.g. office egress "203.0.113.0/24" stays direct).
+#   "corp.internal"   - domain suffix (also matches "x.corp.internal").
+#   "192.168.1."      - plain prefix (kept for back-compat).
 bypass_lan_ranges = [
     # "192.168.1.0/24",
     # "corp.internal",

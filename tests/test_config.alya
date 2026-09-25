@@ -148,6 +148,8 @@ function main()
     runner_assert_eq(r, is_bool_str(toml_get(client, "tunnel_dns")), true, "tunnel_dns must be a boolean")
     runner_assert_eq(r, is_bool_str(toml_get(client, "bypass_lan")), true, "bypass_lan must be a boolean")
     runner_assert_eq(r, is_bool_str(toml_get(client, "auto_sys_proxy")), true, "auto_sys_proxy must be a boolean")
+    runner_assert_eq(r, toml_get(client, "udp_relay_port") != null, true, "udp_relay_port must be set")
+    runner_assert_eq(r, proto::parse_number(toml_get(client, "udp_relay_port")) >= 0, true, "udp_relay_port must be non-negative")
 
     # Server: endpoints, protocol, capacity
     let sport = proto::parse_number(toml_get(server, "port"))
