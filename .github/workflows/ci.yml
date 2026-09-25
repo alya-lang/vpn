@@ -62,6 +62,22 @@ jobs:
         run: |
           alya run tests/test_e2e.alya
 
+      - name: Run forward protocol mode test suite
+        run: |
+          alya run tests/test_protocol_mode.alya
+
+      - name: Run native routing test suite
+        run: |
+          alya run tests/test_native_routing.alya
+
+      - name: Run UDP relay test suite
+        run: |
+          alya run tests/test_udp_relay.alya
+
+      - name: Run config validation test suite
+        run: |
+          alya run tests/test_config.alya
+
       - name: Run benchmark
         run: |
           alya run src/main.alya -- benchmark
