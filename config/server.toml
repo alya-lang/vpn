@@ -4,9 +4,12 @@
 bind_address = "0.0.0.0"
 port = 51822
 passphrase = "change_me_to_a_secure_shared_passphrase_2026"
-protocol = "tcp"
-crypto_threads = 2
-io_threads = 4
+# Forwarded payload types: "tcp" (TCP only), "udp" (UDP only), "both" (default).
+# UDP is carried as UDP-over-TCP datagrams inside the TCP tunnel, so no extra
+# inbound port is needed. Blocked ports and SSRF protection apply to both.
+protocol = "both"
+crypto_threads = 4
+io_threads = 8
 
 # Maximum pending connection queue
 backlog = 128

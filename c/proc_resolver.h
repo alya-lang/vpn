@@ -87,6 +87,28 @@ int  alya_vpn_get_server_log_connections(void);
 // Cross-platform custom TCP listen (supports specific bind IP: 127.0.0.1, 0.0.0.0, etc.)
 int  alya_vpn_tcp_listen(const char *bind_addr, int port, int backlog);
 
+// Forward protocol mode: 1 = TCP only, 2 = UDP only, 3 = both (default).
+// Controls which forwarded payload types are allowed; the tunnel itself
+// always runs over TCP. UDP is carried as UDP-over-TCP datagrams.
+void alya_vpn_set_forward_protocol(int mode);
+int  alya_vpn_get_forward_protocol(void);
+
+// Client UDP relay (SOCKS5 UDP ASSOCIATE endpoint). Binds a UDP socket
+// (fixed port, ephemeral fallback) and returns the bound port, or -1.
+// The handshake reports this port in UDP ASSOCIATE replies.
+int  alya_vpn_udp_relay_init(const char *bind_addr, int port);
+int  alya_vpn_udp_relay_port(void);
+// Relay -> tunnel (+ direct bypass) pump. Returns 1 on activity, 0 when idle.
+int64_t alya_vpn_pump_client_udp_out(int vpn_sock);
+// Tears down associations, mappings and the relay socket.
+void alya_vpn_udp_clear(void);
+// Marks associations unsynced so ASSOC_REQ is re-sent after a reconnect.
+void alya_vpn_udp_resync(void);
+
+// Server per-client UDP association tables (thread-local, like TCP channels).
+void alya_vpn_srv_udp_clear(void);
+void alya_vpn_srv_udp_close_all(void);
+
 // Server SSRF Protection (Block LAN / Loopback destinations)
 void alya_vpn_set_server_block_lan(int enable);
 int  alya_vpn_get_server_block_lan(void);

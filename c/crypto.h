@@ -123,6 +123,12 @@ const uint8_t *alya_vpn_get_session_key_bin(void);
 #define ALYA_AV02_MSG_CLOSE          6
 #define ALYA_AV02_MSG_PING           7
 #define ALYA_AV02_MSG_PONG           8
+// UDP-over-TCP tunnel: datagram transport inside the TCP tunnel.
+// UDP_ASSOC_REQ opens an association (channel_id = assoc id, empty payload).
+// UDP_DATA carries one datagram; payload = [port u16BE][hlen u16BE][host][datagram].
+// CLOSE / CONNECT_RESP are shared with the TCP path.
+#define ALYA_AV02_MSG_UDP_ASSOC_REQ  9
+#define ALYA_AV02_MSG_UDP_DATA       10
 
 int alya_vpn_pack_frame_av02(
     uint8_t type,

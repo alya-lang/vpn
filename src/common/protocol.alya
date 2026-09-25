@@ -17,6 +17,24 @@ function msg_pong() return 8 end
 function proto_tcp() return 1 end
 function proto_udp() return 2 end
 
+# Forward protocol modes (client <-> server agreement on allowed payload types)
+function fwd_tcp_only() return 1 end
+function fwd_udp_only() return 2 end
+function fwd_both() return 3 end
+
+# Parses a "protocol" config value ("tcp" / "udp" / "both", case-insensitive).
+# Returns 1 (TCP only), 2 (UDP only) or 3 (both, default).
+function parse_forward_protocol(s)
+    let v = lower(s)
+    if v == "tcp" or v == "tcp-only" or v == "tcp_only"
+        return 1
+    end
+    if v == "udp" or v == "udp-only" or v == "udp_only"
+        return 2
+    end
+    return 3
+end
+
 # Status Codes
 function status_ok() return 0 end
 function status_auth_failed() return 1 end

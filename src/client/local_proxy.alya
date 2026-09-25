@@ -7,10 +7,15 @@ import "../common/crypto.alya" as crypto
 import "../common/thread_pool.alya" as tpool
 import "../ffi.alya"
 
-# Reads SOCKS5 target host and port from client request
+# Reads SOCKS5 target host and port from client request.
+# Returns: 1 + host + port (TCP CONNECT), 2 + "udp.associate" + 0
+# (UDP ASSOCIATE, control socket now owned by native code), 0 on failure.
 function parse_socks5_request(client_sock)
     let host_buf = "" + crypto::alloc_str(260)
     let port = alya_vpn_socks5_handshake(client_sock, host_buf, 256)
+    if port == -2
+        return 2, "udp.associate", 0
+    end
     if port <= 0 or port >= 65536
         return 0, "", 0
     end
@@ -25,6 +30,7 @@ function vpn_run_client_proxy(cfg)
     let server_host = cfg["server_host"]
     let server_port = cfg["server_port"]
     let passphrase = cfg["passphrase"]
+    let forward_protocol = cfg["forward_protocol"]
     let split_mode = cfg["split_mode"]
     let split_apps = cfg["apps"]
     let split_domains = cfg["domains"]
@@ -81,6 +87,7 @@ function vpn_run_client_proxy(cfg)
     alya_vpn_set_tcp_nodelay(tcp_nodelay)
     alya_vpn_set_idle_timeout_sec(idle_timeout_sec)
     alya_vpn_set_ping_interval_sec(ping_interval_sec)
+    alya_vpn_set_forward_protocol(forward_protocol)
 
     # 5. Configure domain routing rules (*.example.com, etc.)
     alya_vpn_domain_clear()
@@ -110,6 +117,17 @@ function vpn_run_client_proxy(cfg)
     # 7. Clear native channel tables
     alya_vpn_ch_clear()
     alya_vpn_direct_clear()
+    alya_vpn_udp_clear()
+
+    # 8. UDP relay for SOCKS5 UDP ASSOCIATE (UDP-over-TCP tunnel).
+    # Disabled in TCP-only mode. Binds proxy_port+1 with ephemeral fallback.
+    let udp_relay_port = -1
+    if forward_protocol == 2 or forward_protocol == 3
+        udp_relay_port = alya_vpn_udp_relay_init(bind_address, local_port + 1)
+        if udp_relay_port < 0
+            say("[WARN] UDP relay unavailable, continuing with TCP only")
+        end
+    end
 
     let proxy_sock = alya_vpn_tcp_listen(bind_address, local_port, 64)
     if proxy_sock < 0
@@ -159,6 +177,16 @@ function vpn_run_client_proxy(cfg)
     say("[INFO] Local SOCKS5 Proxy: " + bind_address + ":" + local_port)
     say("[INFO] Remote VPN Server:  " + server_host + ":" + server_port)
     say("[INFO] Split Tunnel Mode:  " + mode_str)
+    let proto_str = "TCP+UDP (UDP-over-TCP tunnel)"
+    if forward_protocol == 1
+        proto_str = "TCP only"
+    else if forward_protocol == 2
+        proto_str = "UDP only (UDP-over-TCP tunnel)"
+    end
+    say("[INFO] Forward Protocol:  " + proto_str)
+    if udp_relay_port > 0
+        say("[INFO] UDP Relay:          " + bind_address + ":" + udp_relay_port + " (SOCKS5 UDP ASSOCIATE)")
+    end
     say("[INFO] DNS Protection:     " + dns_str)
     say("[INFO] LAN Traffic:        " + lan_str)
     say("[INFO] Kill Switch:        " + ks_str)
@@ -214,7 +242,14 @@ function vpn_run_client_proxy(cfg)
                 end
 
                 let ok, host, port = parse_socks5_request(app_sock)
-                if ok == 1
+                if ok == 2
+                    # UDP ASSOCIATE: TCP control socket is owned by native
+                    # code from here on; relay address was already reported
+                    # in the handshake reply. Never close it here.
+                    if log_tunnel_traffic == 1
+                        say("[UDP-ASSOC] [" + proc_name + "] relay " + bind_address + ":" + udp_relay_port)
+                    end
+                else if ok == 1
                     if proc_name == "unknown"
                         let inf_buf = "" + crypto::alloc_str(260)
                         let inf_res = alya_vpn_infer_process_from_host(host, inf_buf, 256)
@@ -242,7 +277,10 @@ function vpn_run_client_proxy(cfg)
                             say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Channel " + next_channel_id + ")")
                         end
                         let res = alya_vpn_open_client_channel(vpn_sock, next_channel_id, host, port, app_sock)
-                        if res < 0
+                        if res == -2
+                            say("[PROTO] [ " + proc_name + "] -> " + host + ":" + port + " refused (protocol mode forbids TCP)")
+                            net::tcp_close(app_sock)
+                        else if res < 0
                             net::tcp_close(app_sock)
                         else
                             next_channel_id += 1
@@ -274,6 +312,7 @@ function vpn_run_client_proxy(cfg)
                 say("[WARN] VPN server connection lost. Attempting auto-reconnect...")
                 net::tcp_close(vpn_sock)
                 alya_vpn_ch_clear()
+                alya_vpn_udp_resync()
                 let attempt = 1
                 let reconnected = 0
                 while attempt <= reconnect_attempts or reconnect_attempts == 0
@@ -317,6 +356,13 @@ function vpn_run_client_proxy(cfg)
             end
         end
 
+        # 3b. UDP relay -> tunnel (+ direct bypass) pump
+        if udp_relay_port > 0
+            if alya_vpn_pump_client_udp_out(vpn_sock) == 1
+                activity = 1
+            end
+        end
+
         # 4. Periodic statistics report
         if show_stats == 1
             let now_ms = alya_vpn_get_time_ms()
@@ -334,6 +380,7 @@ function vpn_run_client_proxy(cfg)
 
     net::tcp_close(vpn_sock)
     net::tcp_close(proxy_sock)
+    alya_vpn_udp_clear()
     tpool::thread_pool_shutdown()
 
     if auto_sys_proxy == 1

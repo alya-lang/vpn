@@ -23,6 +23,7 @@ function print_usage()
     say("    --bind <ip>               Bind address (default: 0.0.0.0)")
     say("    --port <port>             Listen port (default: 51822)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
+    say("    --protocol <mode>         Forwarded payloads: tcp, udp or both (default: both)")
     say("    --backlog <N>             Pending connection queue (default: 128)")
     say("    --max-clients <N>         Max concurrent clients (default: 100)")
     say("    --block-lan <bool>        SSRF protection: block internal LAN destinations (default: true)")
@@ -41,6 +42,7 @@ function print_usage()
     say("    --port <port>             Remote VPN server port (default: 51822)")
     say("    --proxy <port>            Local SOCKS5 proxy port (default: 1080)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
+    say("    --protocol <mode>         Forwarded payloads: tcp, udp or both (default: both)")
     say("    --mode <all|inc|exc>      Split-tunnel mode:")
     say("                                all: Route everything via VPN")
     say("                                inc: ONLY listed apps/domains use VPN")
@@ -111,6 +113,7 @@ function load_client_config(config_path)
         "local_port": 1080,
         "bind_address": "127.0.0.1",
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
+        "protocol": "both",
         "mode": "exclude",
         "system_proxy": "true",
         "auto_sys_proxy": "true",
@@ -159,6 +162,8 @@ function load_client_config(config_path)
                 cfg["bind_address"] = strip_val(val)
             else if key == "passphrase"
                 cfg["passphrase"] = strip_val(val)
+            else if key == "protocol" or key == "forward_protocol"
+                cfg["protocol"] = strip_val(val)
             else if key == "mode"
                 cfg["mode"] = strip_val(val)
             else if key == "system_proxy" or key == "auto_system_proxy" or key == "auto_sys_proxy"
@@ -260,6 +265,7 @@ function load_server_config(config_path)
         "bind_address": "0.0.0.0",
         "port": 51822,
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
+        "protocol": "both",
         "crypto_threads": 2,
         "io_threads": 4,
         "backlog": 128,
@@ -292,6 +298,8 @@ function load_server_config(config_path)
                 cfg["bind_address"] = strip_val(val)
             else if key == "passphrase"
                 cfg["passphrase"] = strip_val(val)
+            else if key == "protocol" or key == "forward_protocol"
+                cfg["protocol"] = strip_val(val)
             else if key == "crypto_threads"
                 cfg["crypto_threads"] = proto::parse_number(strip_val(val))
             else if key == "io_threads"
@@ -391,6 +399,7 @@ function main()
         let bind_address = "0.0.0.0"
         let port = 51822
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
+        let forward_protocol_str = "both"
         let crypto_threads = 2
         let io_threads = 4
         let backlog = 128
@@ -414,6 +423,9 @@ function main()
             end
             port = file_cfg["port"]
             pass = file_cfg["passphrase"]
+            if file_cfg["protocol"] != null and len(file_cfg["protocol"]) > 0
+                forward_protocol_str = file_cfg["protocol"]
+            end
             crypto_threads = file_cfg["crypto_threads"]
             io_threads = file_cfg["io_threads"]
             backlog = file_cfg["backlog"]
@@ -457,6 +469,9 @@ function main()
                     end
                     port = custom_cfg["port"]
                     pass = custom_cfg["passphrase"]
+                    if custom_cfg["protocol"] != null and len(custom_cfg["protocol"]) > 0
+                        forward_protocol_str = custom_cfg["protocol"]
+                    end
                     crypto_threads = custom_cfg["crypto_threads"]
                     io_threads = custom_cfg["io_threads"]
                     backlog = custom_cfg["backlog"]
@@ -495,6 +510,9 @@ function main()
                 i += 2
             else if args_list[i] == "--port" and i + 1 < len(args_list)
                 port = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if (args_list[i] == "--protocol" or args_list[i] == "--proto") and i + 1 < len(args_list)
+                forward_protocol_str = args_list[i + 1]
                 i += 2
             else if args_list[i] == "--pass" and i + 1 < len(args_list)
                 pass = args_list[i + 1]
@@ -566,6 +584,7 @@ function main()
             "bind_address": bind_address,
             "port": port,
             "passphrase": pass,
+            "forward_protocol": proto::parse_forward_protocol(forward_protocol_str),
             "crypto_threads": crypto_threads,
             "io_threads": io_threads,
             "backlog": backlog,
@@ -592,6 +611,7 @@ function main()
         let proxy_port = 1080
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let split_mode = router::mode_exclude() # Default blacklist
+        let forward_protocol_str = "both"
         let app_list = ["Speedtest", "Discord", "Chrome", "curl"]
         let domain_list = []
         let auto_sys_proxy = 0
@@ -627,6 +647,9 @@ function main()
                 bind_address = file_cfg["bind_address"]
             end
             pass = file_cfg["passphrase"]
+            if file_cfg["protocol"] != null and len(file_cfg["protocol"]) > 0
+                forward_protocol_str = file_cfg["protocol"]
+            end
             crypto_threads = file_cfg["crypto_threads"]
             io_threads = file_cfg["io_threads"]
             let m = lower(file_cfg["mode"])
@@ -718,6 +741,9 @@ function main()
                         bind_address = custom_cfg["bind_address"]
                     end
                     pass = custom_cfg["passphrase"]
+                    if custom_cfg["protocol"] != null and len(custom_cfg["protocol"]) > 0
+                        forward_protocol_str = custom_cfg["protocol"]
+                    end
                     crypto_threads = custom_cfg["crypto_threads"]
                     io_threads = custom_cfg["io_threads"]
                     let m = lower(custom_cfg["mode"])
@@ -808,6 +834,9 @@ function main()
                 i += 2
             else if args_list[i] == "--proxy" and i + 1 < len(args_list)
                 proxy_port = proto::parse_number(args_list[i + 1])
+                i += 2
+            else if (args_list[i] == "--protocol" or args_list[i] == "--proto") and i + 1 < len(args_list)
+                forward_protocol_str = args_list[i + 1]
                 i += 2
             else if args_list[i] == "--pass" and i + 1 < len(args_list)
                 pass = args_list[i + 1]
@@ -967,6 +996,7 @@ function main()
             "server_host": srv_host,
             "server_port": srv_port,
             "passphrase": pass,
+            "forward_protocol": proto::parse_forward_protocol(forward_protocol_str),
             "split_mode": split_mode,
             "apps": app_list,
             "domains": domain_list,

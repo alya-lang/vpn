@@ -21,6 +21,10 @@ function vpn_run_server(cfg, client_thread_handler)
     let allowed_clients = cfg["allowed_clients"]
     let bind_address = cfg["bind_address"]
     let block_lan = cfg["block_lan_destinations"]
+    let forward_protocol = 3
+    if cfg["forward_protocol"] != null and cfg["forward_protocol"] >= 1
+        forward_protocol = cfg["forward_protocol"]
+    end
     let blocked_ports = cfg["blocked_ports"]
     let idle_timeout_sec = cfg["idle_timeout_sec"]
     let show_stats = cfg["show_stats"]
@@ -39,6 +43,7 @@ function vpn_run_server(cfg, client_thread_handler)
     alya_vpn_set_tcp_nodelay(tcp_nodelay)
     alya_vpn_set_server_log_connections(log_connections)
     alya_vpn_set_server_block_lan(block_lan)
+    alya_vpn_set_forward_protocol(forward_protocol)
     alya_vpn_srv_set_max_clients(max_clients)
     alya_vpn_set_idle_timeout_sec(idle_timeout_sec)
 
@@ -71,6 +76,12 @@ function vpn_run_server(cfg, client_thread_handler)
     if block_lan == 0
         ssrf_str = "DISABLED"
     end
+    let proto_str = "TCP+UDP (UDP-over-TCP tunnel)"
+    if forward_protocol == 1
+        proto_str = "TCP only"
+    else if forward_protocol == 2
+        proto_str = "UDP only (UDP-over-TCP tunnel)"
+    end
 
     say("[INFO] ========================================")
     say("[INFO] Alya VPN Server running on " + bind_address + ":" + listen_port)
@@ -78,6 +89,7 @@ function vpn_run_server(cfg, client_thread_handler)
     say("[INFO] Backlog:         " + backlog + " pending connections")
     say("[INFO] Max Clients:     " + max_clients + " concurrent")
     say("[INFO] SSRF Protection: " + ssrf_str)
+    say("[INFO] Forward Protocol: " + proto_str)
     if len(blocked_ports) > 0
         say("[INFO] Blocked Ports:   " + len(blocked_ports) + " restricted port(s)")
     end
@@ -170,6 +182,7 @@ end
 # Handles a single connected client session
 function vpn_handle_client(client_sock, _session_key)
     alya_vpn_srv_ch_clear()
+    alya_vpn_srv_udp_clear()
 
     while 1
         let activity = 0
@@ -188,6 +201,7 @@ function vpn_handle_client(client_sock, _session_key)
     end
 
     alya_vpn_srv_close_all()
+    alya_vpn_srv_udp_close_all()
     net::tcp_close(client_sock)
 end
 

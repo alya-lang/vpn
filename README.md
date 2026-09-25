@@ -150,6 +150,7 @@ alya run src/main.alya -- client
 - `--server <host:port>`: VPN server endpoint (default: `127.0.0.1:51822`).
 - `--local-port <port>`: Local SOCKS5 listen port (default: `1080`).
 - `--mode <all|include|exclude>`: Split tunneling mode.
+- `--protocol <tcp|udp|both>`: Forwarded payload types (default: `both`). UDP is carried as UDP-over-TCP datagrams; the SOCKS5 UDP relay listens on `proxy_port + 1`.
 - `--apps <app1,app2,...>`: Comma-separated application filters.
 
 ### 3. Configure Applications (e.g. Discord)
