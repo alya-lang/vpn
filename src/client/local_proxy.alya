@@ -34,6 +34,43 @@ function proc_display_name(proc_name, peer_port)
     return proc_name
 end
 
+# Dials the VPN server once. net::tcp_connect throws on hard failures
+# (refused/unreachable) instead of returning -1, so the call is guarded
+# and every outcome funnels to a plain socket-or--1 contract.
+function dial_vpn_once(server_host, server_port)
+    let sock = -1
+    try
+        sock = net::tcp_connect(server_host, server_port)
+    catch conn_err
+        sock = -1
+    end
+    return sock
+end
+
+# Reconnect loop honoring attempts (0 = infinite) and interval.
+# Returns the new tunnel socket, or -1 when attempts run out / stopped.
+function reconnect_vpn(server_host, server_port, reconnect_attempts, reconnect_interval_ms)
+    let attempt = 1
+    while attempt <= reconnect_attempts or reconnect_attempts == 0
+        let attempt_str = "" + attempt
+        if reconnect_attempts > 0
+            attempt_str = attempt_str + "/" + reconnect_attempts
+        end
+        say("[INFO] Reconnecting to VPN server (attempt " + attempt_str + " in " + (reconnect_interval_ms / 1000) + "s)...")
+        alya_vpn_sleep_ms(reconnect_interval_ms)
+        if alya_vpn_is_stop_requested() == 1
+            break
+        end
+        let sock = dial_vpn_once(server_host, server_port)
+        if sock >= 0
+            say("[INFO] Encrypted VPN tunnel re-established successfully!")
+            return sock
+        end
+        attempt += 1
+    end
+    return -1
+end
+
 # Starts the local SOCKS5 proxy and routes traffic according to split-tunneling configuration
 function vpn_run_client_proxy(cfg)
     let local_port = cfg["local_port"]
@@ -208,14 +245,29 @@ function vpn_run_client_proxy(cfg)
     say("[INFO] ========================================")
 
     say("[INFO] Connecting to VPN tunnel server " + server_host + ":" + server_port + "...")
-    let vpn_sock = net::tcp_connect(server_host, server_port)
+    let vpn_sock = dial_vpn_once(server_host, server_port)
     if vpn_sock < 0
-        say("[ERROR] Could not connect to remote VPN server " + server_host + ":" + server_port)
-        net::tcp_close(proxy_sock)
-        tpool::thread_pool_shutdown()
-        return 1
+        if auto_reconnect == 0
+            say("[ERROR] Could not connect to remote VPN server " + server_host + ":" + server_port)
+            net::tcp_close(proxy_sock)
+            tpool::thread_pool_shutdown()
+            return 1
+        end
+        say("[WARN] Initial connection failed. Retrying per auto_reconnect policy...")
+        vpn_sock = reconnect_vpn(server_host, server_port, reconnect_attempts, reconnect_interval_ms)
+        if vpn_sock < 0
+            if kill_switch == 1
+                say("[KILL-SWITCH] Could not establish VPN tunnel. Traffic blocked.")
+            else
+                say("[ERROR] Could not establish VPN tunnel. Exiting.")
+            end
+            net::tcp_close(proxy_sock)
+            tpool::thread_pool_shutdown()
+            return 1
+        end
+    else
+        say("[INFO] Encrypted VPN tunnel established successfully!")
     end
-    say("[INFO] Encrypted VPN tunnel established successfully!")
 
     alya_vpn_init_system_proxy_hook()
 
@@ -324,27 +376,8 @@ function vpn_run_client_proxy(cfg)
                 net::tcp_close(vpn_sock)
                 alya_vpn_ch_clear()
                 alya_vpn_udp_resync()
-                let attempt = 1
-                let reconnected = 0
-                while attempt <= reconnect_attempts or reconnect_attempts == 0
-                    let attempt_str = "" + attempt
-                    if reconnect_attempts > 0
-                        attempt_str = attempt_str + "/" + reconnect_attempts
-                    end
-                    say("[INFO] Reconnecting to VPN server (attempt " + attempt_str + " in " + (reconnect_interval_ms / 1000) + "s)...")
-                    alya_vpn_sleep_ms(reconnect_interval_ms)
-                    if alya_vpn_is_stop_requested() == 1
-                        break
-                    end
-                    vpn_sock = net::tcp_connect(server_host, server_port)
-                    if vpn_sock >= 0
-                        reconnected = 1
-                        say("[INFO] Encrypted VPN tunnel re-established successfully!")
-                        break
-                    end
-                    attempt += 1
-                end
-                if reconnected == 0
+                vpn_sock = reconnect_vpn(server_host, server_port, reconnect_attempts, reconnect_interval_ms)
+                if vpn_sock < 0
                     if kill_switch == 1
                         say("[KILL-SWITCH] Max reconnect attempts reached. Traffic blocked.")
                     else

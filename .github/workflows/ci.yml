@@ -78,6 +78,14 @@ jobs:
         run: |
           alya run tests/test_config.alya
 
+      - name: Run client log label test suite
+        run: |
+          alya run tests/test_client_log.alya
+
+      - name: Run dial reconnect test suite
+        run: |
+          alya run tests/test_reconnect.alya
+
       - name: Run benchmark
         run: |
           alya run src/main.alya -- benchmark

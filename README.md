@@ -156,10 +156,12 @@ alya run src/main.alya -- client
 ### 3. Configure Applications (e.g. Discord)
 
 To route Discord through Alya VPN:
-1. Open Discord Settings -> **Voice & Video** or **Proxy** settings (or use system proxy).
-2. Set SOCKS5 Proxy Host: `127.0.0.1` and Port: `1080`.
-3. In `config/client.toml`, set `mode = "include"` and `apps = ["discord", "Discord.exe"]`.
-4. Discord traffic will now be detected, matched by the process resolver, encrypted with ChaCha20-Poly1305, and forwarded through your remote VPS.
+1. Start the client first, then open Discord **afterwards** so it picks up proxy/DNS settings.
+2. Either rely on the automatic system proxy, or force Discord (macOS):
+   `/Applications/Discord.app/Contents/MacOS/Discord --proxy-server='socks5://127.0.0.1:1080'`
+   (`socks5://` resolves hostnames through the tunnel, which is what the domain rules need).
+3. In `config/client.toml`, keep `mode = "include"` with `apps = ["Discord", "ShipIt", "curl"]` and the Discord `domains` list.
+4. Text/API/gateway traffic is detected, matched, encrypted with ChaCha20-Poly1305, and forwarded through your remote VPS. Voice (UDP) needs an app that uses SOCKS5 UDP ASSOCIATE; raw Discord voice UDP bypasses any SOCKS proxy.
 
 ### macOS notes
 - The Alya runtime on ARM64 Macs can crash (`bus error`) while parsing the

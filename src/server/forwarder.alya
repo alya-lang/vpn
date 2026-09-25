@@ -106,7 +106,14 @@ function vpn_run_server(cfg, client_thread_handler)
         # Poll for new client connection (500ms timeout)
         let poll_res = net::tcp_poll(server_sock, 500)
         if poll_res == 1
-            let client_sock = net::tcp_accept(server_sock)
+            # Guarded: a throwing accept must not kill a server carrying
+            # live client threads.
+            let client_sock = -1
+            try
+                client_sock = net::tcp_accept(server_sock)
+            catch accept_err
+                client_sock = -1
+            end
             if client_sock >= 0
                 let client_ip = net::tcp_peer_ip(client_sock)
                 let client_port = net::tcp_peer_port(client_sock)

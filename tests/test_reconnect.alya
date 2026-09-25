@@ -1,0 +1,24 @@
+# Unit tests for dial/reconnect hardening: refused endpoints must surface
+# as -1, never as a thrown runtime error (which used to kill the client).
+import "std/test"
+import "../src/client/local_proxy.alya" as proxy
+
+function main()
+    test_suite("Dial Reconnect Suite")
+    let r = runner_new()
+
+    # Port 1 refuses immediately; used to throw "Runtime error:" instead.
+    runner_assert_eq(r, proxy::dial_vpn_once("127.0.0.1", 1), -1, "Refused dial returns -1 without throwing")
+    runner_assert_eq(r, proxy::dial_vpn_once("127.0.0.1", 1), -1, "Repeated refused dial stays clean")
+
+    # Bounded reconnect against a dead port exhausts attempts and yields -1.
+    # (attempts=0 means infinite retries, so it is not exercised here.)
+    runner_assert_eq(r, proxy::reconnect_vpn("127.0.0.1", 1, 2, 1), -1, "Exhausted reconnect returns -1")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()
