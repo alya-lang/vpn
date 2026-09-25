@@ -180,7 +180,7 @@ jobs:
           python3 .github/scripts/generate_release_notes.py "$TAG"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: ${{ steps.notes.outputs.title }}
           tag_name: ${{ steps.notes.outputs.tag }}
