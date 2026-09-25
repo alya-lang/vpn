@@ -9,8 +9,12 @@ services:
       - "51822:51822"
     environment:
       - TZ=UTC
+    # NOTE: this check needs health_port = 18080 in the mounted
+    # server.toml (shipped default). With a custom config lacking it,
+    # the container reports unhealthy: either set the port or revert
+    # this test to: nc -z 127.0.0.1 51822 || exit 1
     healthcheck:
-      test: ["CMD-SHELL", "nc -z 127.0.0.1 51822 || exit 1"]
+      test: ["CMD-SHELL", "printf 'GET /healthz HTTP/1.0\\r\\n\\r\\n' | nc -w 2 127.0.0.1 18080 | grep -q 'status.*ok' || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3

@@ -95,8 +95,8 @@ stats_interval_sec = 60
 
 # Loopback-only JSON health endpoint for monitoring (Docker HEALTHCHECK,
 # uptime dashboards). 0 = disabled. Always binds 127.0.0.1 regardless of
-# bind_address: curl http://127.0.0.1:18080/healthz when enabled.
-health_port = 0
+# bind_address: curl http://127.0.0.1:18080/healthz
+health_port = 18080
 
 [logging]
 # Single verbosity preset overriding the toggles below (unset = keep them):
