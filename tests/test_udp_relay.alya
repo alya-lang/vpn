@@ -1,0 +1,40 @@
+# Unit tests for forward-protocol gating and the client UDP relay lifecycle.
+# Binds a real loopback UDP socket (ephemeral port); no server needed.
+# Forward-protocol state is restored to Both at the end of the suite.
+import "std/test"
+import "../src/ffi.alya"
+
+function main()
+    test_suite("UDP Relay Lifecycle Suite")
+    let r = runner_new()
+
+    # 1. Forward-protocol set/get roundtrip with range validation
+    alya_vpn_set_forward_protocol(3)
+    runner_assert_eq(r, alya_vpn_get_forward_protocol(), 3, "Both mode reads back as 3")
+    alya_vpn_set_forward_protocol(1)
+    runner_assert_eq(r, alya_vpn_get_forward_protocol(), 1, "TCP-only mode reads back as 1")
+    alya_vpn_set_forward_protocol(2)
+    runner_assert_eq(r, alya_vpn_get_forward_protocol(), 2, "UDP-only mode reads back as 2")
+    alya_vpn_set_forward_protocol(99)
+    runner_assert_eq(r, alya_vpn_get_forward_protocol(), 2, "Out-of-range mode is rejected, previous kept")
+    alya_vpn_set_forward_protocol(3)
+
+    # 2. Relay lifecycle: init (ephemeral) -> port -> idempotent -> clear
+    let relay_port = alya_vpn_udp_relay_init("127.0.0.1", 0)
+    runner_assert_eq(r, relay_port > 0, true, "Relay binds an ephemeral loopback port")
+    runner_assert_eq(r, alya_vpn_udp_relay_port(), relay_port, "Relay port getter matches bound port")
+    runner_assert_eq(r, alya_vpn_udp_relay_init("127.0.0.1", 0), relay_port, "Second init is idempotent")
+
+    # 3. Idle pump is a safe no-op without associations or tunnel
+    runner_assert_eq(r, alya_vpn_pump_client_udp_out(-1), 0, "Idle relay pump reports no activity")
+
+    alya_vpn_udp_clear()
+    runner_assert_eq(r, alya_vpn_udp_relay_port(), -1, "Relay port resets after clear")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

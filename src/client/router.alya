@@ -134,3 +134,15 @@ function should_route_through_vpn(mode, app_list, proc_name)
 
     return 1 # Default fallback to VPN
 end
+
+# Parses a split-tunnel mode config value ("all" / "inc[lude]" / "exc[lude]",
+# case-insensitive). Unknown values keep the caller-provided default instead
+# of silently changing behavior.
+function parse_split_mode(s, default_mode)
+    return when lower(s)
+        is "all" => mode_all()
+        is "inc", "include" => mode_include()
+        is "exc", "exclude" => mode_exclude()
+        else => default_mode
+    end
+end

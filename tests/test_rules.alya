@@ -46,6 +46,13 @@ function main()
     runner_assert_eq(r, router::should_route_through_vpn(router::mode_exclude(), blacklist, "chrome.exe"), 1, "Chrome SHOULD use VPN in exclude mode")
     runner_assert_eq(r, router::should_route_through_vpn(router::mode_exclude(), blacklist, "curl.exe"), 1, "Curl SHOULD use VPN in exclude mode")
 
+    # 6. Mode string parsing (config values, case-insensitive, default kept)
+    runner_assert_eq(r, router::parse_split_mode("all", 9), 0, "all parses to mode_all")
+    runner_assert_eq(r, router::parse_split_mode("INCLUDE", 9), 1, "INCLUDE parses to mode_include")
+    runner_assert_eq(r, router::parse_split_mode("inc", 9), 1, "inc parses to mode_include")
+    runner_assert_eq(r, router::parse_split_mode("Exc", 9), 2, "Exc parses to mode_exclude")
+    runner_assert_eq(r, router::parse_split_mode("bogus", 9), 9, "Unknown mode keeps caller default")
+
     let failed = runner_summary(r)
     if failed > 0
         exit(1)

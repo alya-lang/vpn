@@ -1,0 +1,170 @@
+# Config validation tests: every key the loaders understand must be present
+# with a value in its accepted set. Catches typos ("protcol") and stale keys.
+# Run from the package root so config/client.toml and config/server.toml
+# resolve (same working directory as `alya test`).
+import "std/test"
+import "../src/common/protocol.alya" as proto
+
+function trim_ws(s)
+    let res = s
+    while len(res) > 0
+        let first = char_at(res, 0)
+        if first == " " or first == "\t" or first == "\r" or first == "\n"
+            res = res.substring(1, len(res) - 1)
+        else
+            break
+        end
+    end
+    while len(res) > 0
+        let last = char_at(res, len(res) - 1)
+        if last == " " or last == "\t" or last == "\r" or last == "\n"
+            res = res.substring(0, len(res) - 1)
+        else
+            break
+        end
+    end
+    return res
+end
+
+function trim_quotes(s)
+    if len(s) >= 2
+        let first = char_at(s, 0)
+        let last = char_at(s, len(s) - 1)
+        if (first == "\"" and last == "\"") or (first == "'" and last == "'")
+            return s.substring(1, len(s) - 2)
+        end
+    end
+    return s
+end
+
+# Returns the raw value string for `key = value`, or null when absent.
+function toml_get(content, key)
+    let lines = proto::split_string(content, "\n")
+    let i = 0
+    while i < len(lines)
+        let line = lines[i]
+        let hash_idx = proto::find_char(line, "#")
+        if hash_idx >= 0
+            line = line.substring(0, hash_idx)
+        end
+        let eq = proto::find_char(line, "=")
+        if eq >= 0
+            if trim_ws(line.substring(0, eq)) == key
+                return trim_quotes(trim_ws(line.substring(eq + 1, len(line) - eq - 1)))
+            end
+        end
+        i += 1
+    end
+    return null
+end
+
+function str_contains(hay, needle)
+    let hlen = len(hay)
+    let nlen = len(needle)
+    if nlen == 0
+        return true
+    end
+    if nlen > hlen
+        return false
+    end
+    let i = 0
+    while i <= hlen - nlen
+        if hay.substring(i, nlen) == needle
+            return true
+        end
+        i += 1
+    end
+    return false
+end
+
+# True when an ACTIVE (non-comment) line inside [section] contains needle.
+# Built without string accumulation: repeated `+` concatenation in a loop
+# corrupts long buffers on this runtime, so this scans line by line.
+function section_contains_active(content, section, needle)
+    let lines = proto::split_string(content, "\n")
+    let in_target = false
+    let found = false
+    let i = 0
+    while i < len(lines)
+        let line = lines[i]
+        let hash_idx = proto::find_char(line, "#")
+        if hash_idx >= 0
+            line = line.substring(0, hash_idx)
+        end
+        let t = trim_ws(line)
+        if len(t) > 0 and char_at(t, 0) == "["
+            in_target = (t == section)
+        else if in_target
+            if str_contains(t, needle)
+                found = true
+            end
+        end
+        i += 1
+    end
+    return found
+end
+
+function is_bool_str(v)
+    return v == "true" or v == "false" or v == "1" or v == "0"
+end
+
+function main()
+    test_suite("Config Validation Suite")
+    let r = runner_new()
+
+    runner_assert_eq(r, file_exists("config/client.toml"), 1, "config/client.toml must exist (run alya test from App/vpn)")
+    runner_assert_eq(r, file_exists("config/server.toml"), 1, "config/server.toml must exist (run alya test from App/vpn)")
+    let client = read_file("config/client.toml")
+    let server = read_file("config/server.toml")
+
+    # Client: endpoints and ports
+    let bind = toml_get(client, "bind_address")
+    runner_assert_eq(r, bind == "127.0.0.1" or bind == "0.0.0.0", true, "Client bind_address must be loopback or LAN-wide")
+    let proxy_port = proto::parse_number(toml_get(client, "local_proxy_port"))
+    runner_assert_eq(r, proxy_port > 0 and proxy_port < 65536, true, "local_proxy_port must be a valid port")
+    let srv_port = proto::parse_number(toml_get(client, "server_port"))
+    runner_assert_eq(r, srv_port > 0 and srv_port < 65536, true, "server_port must be a valid port")
+    runner_assert_eq(r, len(toml_get(client, "server_host")) > 0, true, "server_host must be set")
+    runner_assert_eq(r, len(toml_get(client, "passphrase")) > 0, true, "passphrase must be set")
+
+    # Client: enums use only accepted spellings (typo catcher)
+    let proto_raw = lower(toml_get(client, "protocol"))
+    runner_assert_eq(r, proto_raw == "tcp" or proto_raw == "tcp-only" or proto_raw == "tcp_only" or proto_raw == "udp" or proto_raw == "udp-only" or proto_raw == "udp_only" or proto_raw == "both", true, "Client protocol must be tcp/udp/both")
+    runner_assert_eq(r, proto::parse_forward_protocol(toml_get(client, "protocol")) as int >= 1, true, "Client protocol parses to a valid mode")
+    let mode_raw = lower(toml_get(client, "mode"))
+    runner_assert_eq(r, mode_raw == "all" or mode_raw == "inc" or mode_raw == "include" or mode_raw == "exc" or mode_raw == "exclude", true, "Client mode must be all/include/exclude")
+
+    # Client: tuned content (this repo ships a Discord config)
+    runner_assert_eq(r, section_contains_active(client, "[split_tunnel]", "Discord"), true, "Client apps must include Discord")
+    runner_assert_eq(r, section_contains_active(client, "[split_tunnel]", "discord.com"), true, "Client domains must include Discord")
+
+    # Client: timeouts and booleans present with valid values
+    runner_assert_eq(r, toml_get(client, "reconnect_attempts") != null, true, "reconnect_attempts must be set")
+    runner_assert_eq(r, toml_get(client, "handshake_timeout_ms") != null, true, "handshake_timeout_ms must be set")
+    runner_assert_eq(r, toml_get(client, "connect_timeout_ms") != null, true, "connect_timeout_ms must be set")
+    runner_assert_eq(r, toml_get(client, "idle_timeout_sec") != null, true, "idle_timeout_sec must be set")
+    runner_assert_eq(r, toml_get(client, "ping_interval_sec") != null, true, "ping_interval_sec must be set")
+    runner_assert_eq(r, is_bool_str(toml_get(client, "kill_switch")), true, "kill_switch must be a boolean")
+    runner_assert_eq(r, is_bool_str(toml_get(client, "tunnel_dns")), true, "tunnel_dns must be a boolean")
+    runner_assert_eq(r, is_bool_str(toml_get(client, "bypass_lan")), true, "bypass_lan must be a boolean")
+    runner_assert_eq(r, is_bool_str(toml_get(client, "auto_sys_proxy")), true, "auto_sys_proxy must be a boolean")
+
+    # Server: endpoints, protocol, capacity
+    let sport = proto::parse_number(toml_get(server, "port"))
+    runner_assert_eq(r, sport > 0 and sport < 65536, true, "Server port must be a valid port")
+    let sproto_raw = lower(toml_get(server, "protocol"))
+    runner_assert_eq(r, sproto_raw == "tcp" or sproto_raw == "udp" or sproto_raw == "both", true, "Server protocol must be tcp/udp/both")
+    runner_assert_eq(r, proto::parse_number(toml_get(server, "max_clients")) > 0, true, "max_clients must be positive")
+    runner_assert_eq(r, proto::parse_number(toml_get(server, "backlog")) > 0, true, "backlog must be positive")
+    runner_assert_eq(r, len(toml_get(server, "passphrase")) > 0, true, "Server passphrase must be set")
+    runner_assert_eq(r, is_bool_str(toml_get(server, "block_lan_destinations")), true, "block_lan_destinations must be a boolean")
+    runner_assert_eq(r, is_bool_str(toml_get(server, "log_connections")), true, "log_connections must be a boolean")
+    runner_assert_eq(r, is_bool_str(toml_get(server, "log_client_events")), true, "log_client_events must be a boolean")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

@@ -1,0 +1,80 @@
+# Unit tests for the native split-tunnel routing engine (Discord scenario).
+# Exercises the C engine directly through FFI: app rules, domain rules,
+# loopback/LAN bypass, DNS routing and the include/exclude/all modes.
+# Global engine state is reset to neutral before and after the suite.
+import "std/test"
+import "../src/ffi.alya"
+
+function routing_reset_neutral()
+    alya_vpn_set_routing(0, "")
+    alya_vpn_domain_clear()
+    alya_vpn_dns_clear()
+    alya_vpn_set_tunnel_dns(1)
+    alya_vpn_set_bypass_lan(1)
+end
+
+function main()
+    test_suite("Native Routing Engine Suite")
+    let r = runner_new()
+    routing_reset_neutral()
+
+    # 1. Include mode: app allowlist (Discord family tunneled, rest direct)
+    alya_vpn_set_routing(1, "")
+    alya_vpn_add_routing_app("Discord")
+    alya_vpn_add_routing_app("curl")
+    runner_assert_eq(r, alya_vpn_should_route("Discord"), 1, "Discord uses VPN in include mode")
+    runner_assert_eq(r, alya_vpn_should_route("Discord.exe"), 1, "Discord.exe uses VPN in include mode")
+    runner_assert_eq(r, alya_vpn_should_route("Discord Helper (Renderer)"), 1, "Discord Helper uses VPN in include mode")
+    runner_assert_eq(r, alya_vpn_should_route("curl"), 1, "curl uses VPN in include mode")
+    runner_assert_eq(r, alya_vpn_should_route("chrome"), 0, "Chrome bypasses VPN in include mode")
+    runner_assert_eq(r, alya_vpn_should_route("unknown"), 0, "Unknown process bypasses VPN in include mode")
+    runner_assert_eq(r, alya_vpn_should_route(""), 0, "Empty process name bypasses VPN in include mode")
+
+    # 2. Domain rules without any apps: Discord hosts tunneled by name
+    alya_vpn_set_routing(1, "")
+    alya_vpn_domain_clear()
+    alya_vpn_add_routing_domain("*.discord.com")
+    alya_vpn_add_routing_domain("discord.com")
+    runner_assert_eq(r, alya_vpn_should_route_host("gateway.discord.com", 443), 1, "Discord subdomain tunneled by domain rule")
+    runner_assert_eq(r, alya_vpn_should_route_host("discord.com", 443), 1, "Bare Discord domain tunneled by domain rule")
+    runner_assert_eq(r, alya_vpn_should_route_host("example.com", 443), -1, "Unlisted host defers to process decision")
+    runner_assert_eq(r, alya_vpn_should_route_host("162.159.135.232", 443), -1, "Raw IP defers to process decision")
+
+    # 3. Loopback always bypasses, even with matching rules
+    runner_assert_eq(r, alya_vpn_should_route_host("127.0.0.1", 443), 0, "Loopback bypasses VPN")
+    runner_assert_eq(r, alya_vpn_should_route_host("localhost", 443), 0, "localhost bypasses VPN")
+
+    # 4. LAN bypass toggle
+    runner_assert_eq(r, alya_vpn_should_route_host("192.168.1.5", 443), 0, "LAN bypasses VPN when enabled")
+    alya_vpn_set_bypass_lan(0)
+    runner_assert_eq(r, alya_vpn_should_route_host("192.168.1.5", 443), -1, "LAN defers to process decision when bypass off")
+    alya_vpn_set_bypass_lan(1)
+
+    # 5. DNS routing follows tunnel_dns
+    runner_assert_eq(r, alya_vpn_should_route_host("1.1.1.1", 53), 1, "DNS port tunneled when enabled")
+    runner_assert_eq(r, alya_vpn_should_route_host("8.8.8.8", 443), 1, "Known DNS server tunneled when enabled")
+    alya_vpn_set_tunnel_dns(0)
+    runner_assert_eq(r, alya_vpn_should_route_host("8.8.8.8", 443), -1, "Known DNS server defers when tunnel_dns off")
+    alya_vpn_set_tunnel_dns(1)
+
+    # 6. Exclude mode: listed apps bypass, everything else tunneled
+    alya_vpn_set_routing(2, "")
+    alya_vpn_add_routing_app("discord")
+    runner_assert_eq(r, alya_vpn_should_route("Discord.exe"), 0, "Discord bypasses VPN in exclude mode")
+    runner_assert_eq(r, alya_vpn_should_route("chrome"), 1, "Chrome uses VPN in exclude mode")
+    runner_assert_eq(r, alya_vpn_should_route("unknown"), 1, "Unknown process uses VPN in exclude mode")
+
+    # 7. All mode routes everything
+    alya_vpn_set_routing(0, "")
+    runner_assert_eq(r, alya_vpn_should_route("anything.exe"), 1, "All mode routes every process via VPN")
+    runner_assert_eq(r, alya_vpn_should_route_host("example.com", 80), 1, "All mode routes every host via VPN")
+
+    routing_reset_neutral()
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

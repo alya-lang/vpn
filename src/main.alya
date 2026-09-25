@@ -652,12 +652,7 @@ function main()
             end
             crypto_threads = file_cfg["crypto_threads"]
             io_threads = file_cfg["io_threads"]
-            split_mode = when lower(file_cfg["mode"])
-                is "all" => router::mode_all()
-                is "inc", "include" => router::mode_include()
-                is "exc", "exclude" => router::mode_exclude()
-                else => split_mode
-            end
+            split_mode = router::parse_split_mode(file_cfg["mode"], split_mode)
             if file_cfg["system_proxy"] == "true" or file_cfg["system_proxy"] == "1" or file_cfg["auto_sys_proxy"] == "true" or file_cfg["auto_sys_proxy"] == "1"
                 auto_sys_proxy = 1
             else if file_cfg["system_proxy"] == "false" or file_cfg["system_proxy"] == "0" or file_cfg["auto_sys_proxy"] == "false" or file_cfg["auto_sys_proxy"] == "0"
@@ -744,12 +739,7 @@ function main()
                     end
                     crypto_threads = custom_cfg["crypto_threads"]
                     io_threads = custom_cfg["io_threads"]
-                    split_mode = when lower(custom_cfg["mode"])
-                        is "all" => router::mode_all()
-                        is "inc", "include" => router::mode_include()
-                        is "exc", "exclude" => router::mode_exclude()
-                        else => split_mode
-                    end
+                    split_mode = router::parse_split_mode(custom_cfg["mode"], split_mode)
                     if custom_cfg["system_proxy"] == "true" or custom_cfg["system_proxy"] == "1" or custom_cfg["auto_sys_proxy"] == "true" or custom_cfg["auto_sys_proxy"] == "1"
                         auto_sys_proxy = 1
                     else if custom_cfg["system_proxy"] == "false" or custom_cfg["system_proxy"] == "0" or custom_cfg["auto_sys_proxy"] == "false" or custom_cfg["auto_sys_proxy"] == "0"
@@ -838,12 +828,7 @@ function main()
                 pass = args_list[i + 1]
                 i += 2
             else if args_list[i] == "--mode" and i + 1 < len(args_list)
-                split_mode = when lower(args_list[i + 1])
-                    is "all" => router::mode_all()
-                    is "inc", "include" => router::mode_include()
-                    is "exc", "exclude" => router::mode_exclude()
-                    else => split_mode
-                end
+                split_mode = router::parse_split_mode(args_list[i + 1], split_mode)
                 i += 2
             else if args_list[i] == "--apps" and i + 1 < len(args_list)
                 let raw_apps = proto::split_string(args_list[i + 1], ",")
