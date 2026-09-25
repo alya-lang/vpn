@@ -25,7 +25,7 @@ local_proxy_port = 1080
 # (here: 127.0.0.1:1081, ephemeral fallback if occupied).
 
 # Remote VPN server endpoint (the [server] section of server.toml).
-server_host = "127.0.0.1"
+server_host = "YOUR_SERVER_IP"
 # server_host = "127.0.0.1"  # local test server alternative
 server_port = 51822
 
@@ -52,10 +52,14 @@ io_threads = 2
 
 # Automatically set the OS proxy (Windows registry / macOS networksetup +
 # launchctl env) to this proxy on startup and restore it on clean exit.
+# macOS: applies to ALL enabled network services (Wi-Fi, Ethernet, iPhone
+# USB, Thunderbolt, ...) and, while tunnel_dns is on, points OS DNS at
+# uncensored resolvers (saved values are restored on exit).
 # Aliases: system_proxy, auto_system_proxy.
-# WARNING: if the client is force-killed, the OS proxy may stay pointed at
-# a dead port and proxy-aware apps lose connectivity until you disable it
-# manually (Windows: Internet Options > Connections > LAN settings).
+# WARNING: if the client is force-killed, OS proxy/DNS may stay overridden
+# (Windows: Internet Options > LAN settings; macOS: networksetup
+# -setdnsservers <svc> Empty). Restart tunneled apps AFTER starting the
+# client so they pick up the proxy/DNS settings.
 auto_sys_proxy = true
 
 [connection]

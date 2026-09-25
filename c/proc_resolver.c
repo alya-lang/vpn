@@ -690,8 +690,13 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
     }
     free(pids);
 
-    // Fast fallback using lsof for short-lived or race sockets
-    if (!found && peer_remote_port > 0) {
+    // Fallback using lsof for short-lived or race sockets, rate-limited:
+    // an unbounded popen per unresolved connection fork-storms under churn.
+    static uint32_t s_last_lsof_ms = 0;
+    uint32_t now_lsof = get_time_ms();
+    if (!found && peer_remote_port > 0 &&
+        (s_last_lsof_ms == 0 || now_lsof - s_last_lsof_ms > 2000)) {
+        s_last_lsof_ms = now_lsof;
         char cmd[128];
         snprintf(cmd, sizeof(cmd), "lsof -n -P -iTCP:%d -sTCP:ESTABLISHED -F c 2>/dev/null", peer_remote_port);
         FILE *fp = popen(cmd, "r");
@@ -734,9 +739,10 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
     }
 
     int found = 0;
+    pid_t my_pid = getpid();
     for (int i = 0; i < num_pids && !found; ++i) {
         pid_t pid = pids[i];
-        if (pid <= 0) continue;
+        if (pid <= 0 || pid == my_pid) continue;
 
         int buf_size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
         if (buf_size <= 0) continue;
@@ -778,7 +784,73 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
 }
 
 int alya_vpn_get_udp_process_by_port(int local_port, char *out_name, int max_len) {
-    return alya_vpn_get_process_by_port(local_port, out_name, max_len);
+    if (!out_name || max_len <= 0) return 0;
+    out_name[0] = '\0';
+
+    int num_pids = proc_listallpids(NULL, 0);
+    if (num_pids <= 0) return 0;
+
+    pid_t *pids = (pid_t *)malloc(sizeof(pid_t) * (size_t)num_pids * 2);
+    if (!pids) return 0;
+
+    num_pids = proc_listallpids(pids, (int)(sizeof(pid_t) * (size_t)num_pids * 2));
+    if (num_pids <= 0) {
+        free(pids);
+        return 0;
+    }
+
+    int found = 0;
+    pid_t my_pid = getpid();
+    for (int i = 0; i < num_pids && !found; ++i) {
+        pid_t pid = pids[i];
+        if (pid <= 0 || pid == my_pid) continue;
+
+        int buf_size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
+        if (buf_size <= 0) continue;
+
+        struct proc_fdinfo stack_fds[128];
+        struct proc_fdinfo *fds = stack_fds;
+        int count = buf_size / (int)sizeof(struct proc_fdinfo);
+        if (count > 128) {
+            fds = (struct proc_fdinfo *)malloc((size_t)buf_size);
+            if (!fds) continue;
+        }
+
+        int num_fds = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, buf_size);
+        if (num_fds <= 0) {
+            if (fds != stack_fds) free(fds);
+            continue;
+        }
+
+        count = num_fds / (int)sizeof(struct proc_fdinfo);
+        for (int j = 0; j < count; ++j) {
+            if (fds[j].proc_fdtype == PROX_FDTYPE_SOCKET) {
+                struct socket_fdinfo si;
+                memset(&si, 0, sizeof(si));
+                int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
+                if (s > (int)sizeof(struct proc_fileinfo)) {
+                    // UDP sockets report SOCKINFO_IN with IPPROTO_UDP
+                    // (TCP sockets report SOCKINFO_TCP and are skipped here).
+                    int kind = si.psi.soi_kind;
+                    if ((kind == SOCKINFO_IN || kind == 0) &&
+                        si.psi.soi_protocol == IPPROTO_UDP) {
+                        int raw_lport = (int)(uint16_t)si.psi.soi_proto.pri_in.insi_lport;
+                        int swap_lport = (int)ntohs((uint16_t)raw_lport);
+                        if (raw_lport == local_port || swap_lport == local_port) {
+                            if (!macos_get_proc_name_or_bundle(pid, out_name, max_len)) {
+                                snprintf(out_name, (size_t)max_len, "pid-%d", (int)pid);
+                            }
+                            found = 1;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if (fds != stack_fds) free(fds);
+    }
+    free(pids);
+    return found;
 }
 
 #else
@@ -1770,16 +1842,75 @@ int alya_vpn_should_route_host(const char *host, int port) {
     return -1; // No domain-specific override -> use process decision
 }
 
+// Small TTL caches: process resolution walks the OS tables on every new
+// connection (and per UDP datagram burst). Cache successes briefly; ports
+// are recycled slowly, so an 8s TTL cannot misattribute in practice.
+#define ALYA_ROUTE_CACHE_N 64
+#define ALYA_ROUTE_CACHE_TTL_MS 8000
+
+typedef struct {
+    int in_use;
+    uint32_t key;
+    char name[64];
+    uint32_t ts;
+} AlyaRouteCacheEntry;
+
+static AlyaRouteCacheEntry s_peer_cache[ALYA_ROUTE_CACHE_N];
+static AlyaRouteCacheEntry s_udp_cache[ALYA_ROUTE_CACHE_N];
+
+static int route_cache_get(AlyaRouteCacheEntry *tab, uint32_t key, char *out, int max_len) {
+    if (!tab || !out || max_len <= 0) return 0;
+    uint32_t now = get_time_ms();
+    for (int i = 0; i < ALYA_ROUTE_CACHE_N; ++i) {
+        if (tab[i].in_use && tab[i].key == key) {
+            if (now - tab[i].ts <= ALYA_ROUTE_CACHE_TTL_MS) {
+                strncpy(out, tab[i].name, (size_t)max_len - 1);
+                out[max_len - 1] = '\0';
+                return 1;
+            }
+            tab[i].in_use = 0;
+            return 0;
+        }
+    }
+    return 0;
+}
+
+static void route_cache_put(AlyaRouteCacheEntry *tab, uint32_t key, const char *name) {
+    if (!tab || !name || !name[0]) return;
+    int slot = -1;
+    int i;
+    for (i = 0; i < ALYA_ROUTE_CACHE_N; ++i) {
+        if (tab[i].in_use && tab[i].key == key) { slot = i; break; }
+    }
+    if (slot < 0) {
+        for (i = 0; i < ALYA_ROUTE_CACHE_N; ++i) {
+            if (!tab[i].in_use) { slot = i; break; }
+        }
+    }
+    if (slot < 0) slot = (int)(key % (uint32_t)ALYA_ROUTE_CACHE_N); // full: evict by hash
+    tab[slot].in_use = 1;
+    tab[slot].key = key;
+    strncpy(tab[slot].name, name, sizeof(tab[slot].name) - 1);
+    tab[slot].name[sizeof(tab[slot].name) - 1] = '\0';
+    tab[slot].ts = get_time_ms();
+}
+
 // UPDATED: Now takes both proxy_local_port (the port the VPN proxy listens on)
 // and peer_remote_port (the client's ephemeral source port).
 // Uses the new alya_vpn_get_process_by_peer_port which matches BOTH ports.
 int alya_vpn_check_peer_route(int proxy_local_port, int peer_remote_port, char *out_proc_name, int max_len) {
     if (!out_proc_name || max_len <= 0) return 1;
     out_proc_name[0] = '\0';
+    uint32_t key = ((uint32_t)(proxy_local_port & 0xFFFF) << 16) | (uint32_t)(peer_remote_port & 0xFFFF);
+    if (route_cache_get(s_peer_cache, key, out_proc_name, max_len)) {
+        return alya_vpn_should_route(out_proc_name);
+    }
     int res = alya_vpn_get_process_by_peer_port(proxy_local_port, peer_remote_port, out_proc_name, max_len);
     if (!res || !out_proc_name[0]) {
         strncpy(out_proc_name, "unknown", (size_t)max_len - 1);
         out_proc_name[max_len - 1] = '\0';
+    } else {
+        route_cache_put(s_peer_cache, key, out_proc_name);
     }
     return alya_vpn_should_route(out_proc_name);
 }
@@ -2761,9 +2892,13 @@ int64_t alya_vpn_pump_client_udp_out(int vpn_sock) {
         else {
             char pname[256] = {0};
             int src_port = (int)ntohs(src.sin_port);
-            if (!alya_vpn_get_udp_process_by_port(src_port, pname, sizeof(pname)) || !pname[0]) {
-                // Peer-port match is TCP-only; fall back to sender-port lookup.
-                strncpy(pname, "unknown", sizeof(pname) - 1);
+            uint32_t ukey = (uint32_t)(src_port & 0xFFFF);
+            if (!route_cache_get(s_udp_cache, ukey, pname, sizeof(pname))) {
+                if (!alya_vpn_get_udp_process_by_port(src_port, pname, sizeof(pname)) || !pname[0]) {
+                    strncpy(pname, "unknown", sizeof(pname) - 1);
+                } else {
+                    route_cache_put(s_udp_cache, ukey, pname);
+                }
             }
             decision = alya_vpn_should_route(pname);
         }
@@ -3740,7 +3875,123 @@ void alya_vpn_init_system_proxy_hook(void) {
 }
 #elif defined(__APPLE__)
 
+#define ALYA_MAC_MAX_SERVICES 16
+
 static int s_mac_proxy_active = 0;
+
+// Enumerates enabled network services (Wi-Fi, Ethernet, iPhone USB,
+// Thunderbolt Bridge, USB LAN, ...). Hardcoding two names silently skips
+// whichever uplink is actually active.
+static int macos_list_services(char svcs[][128], int max_svcs) {
+    int n = 0;
+    FILE *fp = popen("networksetup -listallnetworkservices 2>/dev/null", "r");
+    if (!fp) return 0;
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        size_t L = strlen(line);
+        while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r')) line[--L] = '\0';
+        if (L == 0 || line[0] == '*') continue; // empty / disabled service
+        if (strncmp(line, "An asterisk", 11) == 0) continue; // header note
+        if (n < max_svcs) {
+            strncpy(svcs[n], line, 127);
+            svcs[n][127] = '\0';
+            n++;
+        }
+    }
+    pclose(fp);
+    return n;
+}
+
+// Per-service DNS override bookkeeping. Raw UDP/53 never enters the SOCKS
+// proxy, so while the tunnel is active the OS resolvers are pointed at
+// uncensored DNS and restored afterwards. SIGKILL skips atexit restore;
+// the user must then re-select DNS manually (documented in client.toml).
+static char s_mac_dns_svc[ALYA_MAC_MAX_SERVICES][128];
+static char s_mac_dns_val[ALYA_MAC_MAX_SERVICES][256];
+static int s_mac_dns_count = 0;
+
+// Picks override DNS: user-configured IPv4 literals first, else public pair.
+static void macos_dns_pick_override(char *out, int max_out) {
+    char picked[2][64];
+    int np = 0;
+    for (int i = 0; i < s_dns_server_count && np < 2; ++i) {
+        unsigned int a, b, c, d;
+        if (sscanf(s_dns_servers[i], "%u.%u.%u.%u", &a, &b, &c, &d) == 4 &&
+            a < 256 && b < 256 && c < 256 && d < 256) {
+            snprintf(picked[np], sizeof(picked[np]), "%u.%u.%u.%u", a, b, c, d);
+            np++;
+        }
+    }
+    if (np == 0) {
+        snprintf(out, (size_t)max_out, "1.1.1.1 8.8.8.8");
+    } else if (np == 1) {
+        snprintf(out, (size_t)max_out, "%s", picked[0]);
+    } else {
+        snprintf(out, (size_t)max_out, "%s %s", picked[0], picked[1]);
+    }
+}
+
+static void macos_set_service_dns(const char *service, int enable) {
+    char cmd[512];
+    if (enable) {
+        int known = 0;
+        for (int i = 0; i < s_mac_dns_count; ++i) {
+            if (strcmp(s_mac_dns_svc[i], service) == 0) { known = 1; break; }
+        }
+        if (!known && s_mac_dns_count < ALYA_MAC_MAX_SERVICES) {
+            char acc[256] = {0};
+            snprintf(cmd, sizeof(cmd), "networksetup -getdnsservers \"%s\" 2>/dev/null", service);
+            FILE *fp = popen(cmd, "r");
+            if (fp) {
+                char line[128];
+                while (fgets(line, sizeof(line), fp)) {
+                    size_t L = strlen(line);
+                    while (L > 0 && (line[L - 1] == '\n' || line[L - 1] == '\r' ||
+                                     line[L - 1] == ' ' || line[L - 1] == '\t')) line[--L] = '\0';
+                    if (L == 0) continue;
+                    if (strstr(line, "There aren't any DNS") != NULL) { acc[0] = '\0'; break; }
+                    if (strlen(acc) + L + 2 < sizeof(acc)) {
+                        if (acc[0]) strncat(acc, " ", sizeof(acc) - strlen(acc) - 1);
+                        strncat(acc, line, sizeof(acc) - strlen(acc) - 1);
+                    }
+                }
+                pclose(fp);
+            }
+            strncpy(s_mac_dns_svc[s_mac_dns_count], service, 127);
+            s_mac_dns_svc[s_mac_dns_count][127] = '\0';
+            if (acc[0]) {
+                strncpy(s_mac_dns_val[s_mac_dns_count], acc, 255);
+            } else {
+                strncpy(s_mac_dns_val[s_mac_dns_count], "Empty", 255);
+            }
+            s_mac_dns_val[s_mac_dns_count][255] = '\0';
+            s_mac_dns_count++;
+        }
+        char bypass[128];
+        macos_dns_pick_override(bypass, sizeof(bypass));
+        snprintf(cmd, sizeof(cmd), "networksetup -setdnsservers \"%s\" %s >/dev/null 2>&1",
+                 service, bypass);
+        system(cmd);
+    } else {
+        for (int i = 0; i < s_mac_dns_count; ++i) {
+            if (strcmp(s_mac_dns_svc[i], service) == 0) {
+                snprintf(cmd, sizeof(cmd), "networksetup -setdnsservers \"%s\" %s >/dev/null 2>&1",
+                         service, s_mac_dns_val[i]);
+                system(cmd);
+                if (i != s_mac_dns_count - 1) {
+                    memcpy(s_mac_dns_svc[i], s_mac_dns_svc[s_mac_dns_count - 1],
+                           sizeof(s_mac_dns_svc[i]));
+                    memcpy(s_mac_dns_val[i], s_mac_dns_val[s_mac_dns_count - 1],
+                           sizeof(s_mac_dns_val[i]));
+                }
+                memset(s_mac_dns_svc[s_mac_dns_count - 1], 0, sizeof(s_mac_dns_svc[0]));
+                memset(s_mac_dns_val[s_mac_dns_count - 1], 0, sizeof(s_mac_dns_val[0]));
+                s_mac_dns_count--;
+                break;
+            }
+        }
+    }
+}
 
 static void macos_set_service_proxy(const char *service, int enable, int port) {
     char cmd[256];
@@ -3787,8 +4038,22 @@ static void vpn_posix_sig_handler(int sig) {
 }
 
 void alya_vpn_set_system_proxy(int enable, int port) {
-    macos_set_service_proxy("Wi-Fi", enable, port);
-    macos_set_service_proxy("Ethernet", enable, port);
+    char svcs[ALYA_MAC_MAX_SERVICES][128];
+    int n = macos_list_services(svcs, ALYA_MAC_MAX_SERVICES);
+    if (n <= 0) {
+        // networksetup unavailable: keep the historical pair as fallback.
+        strncpy(svcs[0], "Wi-Fi", 127);
+        svcs[0][127] = '\0';
+        strncpy(svcs[1], "Ethernet", 127);
+        svcs[1][127] = '\0';
+        n = 2;
+    }
+    for (int i = 0; i < n; ++i) {
+        macos_set_service_proxy(svcs[i], enable, port);
+        // Mirror DNS through the tunnel while active; entries are saved
+        // above and restored on disable/exit.
+        if (s_tunnel_dns) macos_set_service_dns(svcs[i], enable);
+    }
 
     // Resolve active GUI user UID (if running under sudo)
     const char *sudo_uid = getenv("SUDO_UID");
