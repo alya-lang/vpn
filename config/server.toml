@@ -1,57 +1,103 @@
 # Alya VPN - Server Configuration
-[server]
-# Network interface address to bind to ("0.0.0.0" for all interfaces, or a specific local IP)
-bind_address = "0.0.0.0"
-port = 51822
-passphrase = "change_me_to_a_secure_shared_passphrase_2026"
-# Forwarded payload types: "tcp" (TCP only), "udp" (UDP only), "both" (default).
-# UDP is carried as UDP-over-TCP datagrams inside the TCP tunnel, so no extra
-# inbound port is needed. Blocked ports and SSRF protection apply to both.
-protocol = "both"
-crypto_threads = 4
-io_threads = 8
+#
+# HOW THIS FILE IS READ (src/main.alya: load_server_config):
+# - Section headers ([server], [security], ...) are cosmetic; keys live in
+#   one flat namespace. Do not define the same key twice.
+# - Precedence (highest wins): CLI flags > --config <file> > this file >
+#   built-in defaults. Every key below is optional.
+# - Booleans accept lowercase "true"/"1" (on) and "false"/"0" (off) only.
+# - Arrays accept inline (blocked_ports = [25, 587]) or multi-line form.
+# - Time units matter: keys ending in _ms are milliseconds, _sec are seconds.
+# - There is no client authentication beyond the shared passphrase plus the
+#   optional allowed_clients IP whitelist below. Guard `port` with a host
+#   firewall and change the default passphrase before exposing the server.
 
-# Maximum pending connection queue
+[server]
+# Local interface to listen on. "0.0.0.0" = all interfaces (VPS default).
+# Alias: bind_ip.
+bind_address = "0.0.0.0"
+
+# Inbound tunnel port. The tunnel transport is always TCP; no second
+# (UDP) inbound port is required for UDP forwarding (see protocol below).
+port = 51822
+
+# Shared secret for ChaCha20-Poly1305. MUST equal the client's passphrase.
+# NEVER run a public server with the default value: anyone who knows it can
+# push traffic through your VPS and read it.
+passphrase = "change_me_to_a_secure_shared_passphrase_2026"
+
+# Forwarded payload types. Case-insensitive. Aliases: forward_protocol.
+#   "tcp"  - TCP destinations only. UDP datagrams are refused.
+#   "udp"  - UDP destinations only. TCP connects are refused.
+#   "both" - TCP and UDP (default). Recommended: keep "both" here and let
+#            each client narrow it down if needed. Unknown values -> "both".
+# UDP is carried as UDP-over-TCP datagrams inside the TCP tunnel, so VPS
+# firewalls / docker-compose need no extra inbound port for it. Blocked
+# ports and SSRF protection below apply to TCP and UDP alike. Client and
+# server modes must overlap or nothing is forwarded.
+protocol = "both"
+
+# Worker threads for crypto and I/O. 2/4 suits a small VPS; raise both on
+# multi-core machines serving many concurrent clients.
+crypto_threads = 2
+io_threads = 4
+
+# Kernel pending-connection queue for the listen socket.
 backlog = 128
 
-# Maximum concurrent connected clients
+# Concurrent client cap. Extra connections are refused with a warning.
+# Each accepted client spawns one handler thread (see vpn_client_thread).
 max_clients = 100
 
 [security]
-# SSRF Protection: Prevent VPN clients from reaching internal server networks, loopback, or cloud metadata.
-# Blocks: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.169.254 (AWS/GCP metadata)
+# SSRF protection: refuse forwarding to server-local destinations for BOTH
+# TCP and UDP. Covered: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12,
+# 192.168.0.0/16, 169.254.0.0/16 (incl. 169.254.169.254 cloud metadata),
+# localhost, ::1, 0.0.0.0, *.local, *.lan, *.home, *.internal.
+# Disable ONLY for loopback/LAN testing (--no-block-lan); never in production.
+# Aliases: block_lan, ssrf_protection.
 block_lan_destinations = true
 
-# Restricted outbound destination ports to block (e.g. SMTP ports to prevent spam / abuse)
+# Destination ports refused for BOTH TCP and UDP (spam/abuse control).
+# SMTP defaults block outbound mail relay through the VPN.
 blocked_ports = [
     25,
     465,
     587
 ]
 
-# IP whitelist: Only listed client IPs are permitted to connect.
-# Leave empty to allow any client with the correct shared passphrase.
+# Client IP whitelist. Empty = any IP may connect if it proves the
+# passphrase (there is no per-client key). List VPS-trusted client IPs here
+# to shrink brute-force exposure. Alias: whitelist.
 allowed_clients = [
     # "198.51.100.42",
     # "203.0.113.15"
 ]
 
 [performance]
-# Low-latency TCP optimization (disables Nagle algorithm for gaming and voice chat)
+# TCP_NODELAY (disables Nagle) for lower latency in gaming / voice / chat.
+# Alias: nodelay.
 tcp_nodelay = true
 
-# Inactive forward channel teardown timeout in seconds (0 = disabled, default = 300s)
+# Idle teardown for forwarding channels, in seconds. 0 = never expire.
+# Server-side UDP association sockets use this too, with a 120s fallback
+# when 0. Alias: idle_timeout.
 idle_timeout_sec = 300
 
 [monitoring]
-# Periodically print server traffic statistics (Active clients, active channels, TX/RX throughput)
+# Periodic traffic summary (active clients/channels, TX/RX). Alias: stats.
 show_stats = false
+# Summary interval, in seconds. Ignored unless show_stats = true.
+# Alias: stats_interval.
 stats_interval_sec = 60
 
 [logging]
-# Log each client connection and disconnection event
+# One line per accepted/refused client connection and disconnection.
 log_client_events = true
 
-# Log each individual forward channel request ([FORWARD] Channel X -> host:port)
-# Set to false on high-traffic production servers to keep logs quiet and save disk I/O
+# One line per forward request, e.g.:
+#   [FORWARD] Connected: Channel 3 -> discord.com:443
+#   [FORWARD] UDP association opened: Assoc 2
+#   [SECURITY] Blocked ... / [PROTO] Refused ... (UDP/TCP, ports, SSRF)
+# Disable on high-traffic production servers to save disk I/O.
 log_connections = true

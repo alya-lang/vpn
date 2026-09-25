@@ -1,113 +1,201 @@
 # Alya VPN - Client Configuration
+#
+# HOW THIS FILE IS READ (src/main.alya: load_client_config):
+# - Section headers ([client], [dns], ...) are cosmetic; keys live in one
+#   flat namespace. Do not define the same key twice.
+# - Precedence (highest wins): CLI flags > --config <file> > this file >
+#   built-in defaults. Every key below is optional.
+# - Booleans accept lowercase "true"/"1" (on) and "false"/"0" (off) only.
+#   "True", "yes" or "on" are NOT recognized and leave the previous value.
+# - Arrays accept inline (apps = ["a", "b"]) or multi-line bracket form.
+# - Time units matter: keys ending in _ms are milliseconds, _sec are seconds.
+
 [client]
-# Network interface address to bind the local SOCKS5 proxy to
-# "127.0.0.1" for local machine only, or "0.0.0.0" to share across your local network
+# Local interface for the SOCKS5 proxy.
+# "127.0.0.1" = this machine only. "0.0.0.0" = share on your LAN (then
+# anyone on your network can use your tunnel; protect with firewall rules).
+# Aliases: bind_ip.
 bind_address = "127.0.0.1"
+
+# Local SOCKS5 (TCP) listen port. Point apps / OS proxy settings here.
+# Alias: local_port.
 local_proxy_port = 1080
+# NOTE: when protocol includes UDP (default), a UDP relay for SOCKS5
+# UDP ASSOCIATE is opened automatically on local_proxy_port + 1
+# (here: 127.0.0.1:1081, ephemeral fallback if occupied).
 
+# Remote VPN server endpoint (the [server] section of server.toml).
 server_host = "127.0.0.1"
+# server_host = "127.0.0.1"  # local test server alternative
 server_port = 51822
-passphrase = "change_me_to_a_secure_shared_passphrase_2026"
-protocol = "tcp"
-crypto_threads = 2
-io_threads = 4
 
-# Automatically configure operating system proxy (Windows/macOS) on startup and restore on exit
+# Shared secret for ChaCha20-Poly1305. MUST be identical on server and
+# client. NEVER leave the default value on a public server: anyone who
+# knows it can use your tunnel and decrypt its traffic.
+passphrase = "change_me_to_a_secure_shared_passphrase_2026"
+
+# Forwarded payload types. Case-insensitive. Aliases: forward_protocol.
+#   "tcp"  - TCP only. No UDP relay is opened; UDP ASSOCIATE is refused.
+#   "udp"  - UDP only (UDP-over-TCP tunnel). TCP CONNECT is refused locally
+#            with a [PROTO] log line.
+#   "both" - TCP and UDP (default). Recommended: keep "both" on both ends.
+#            Unknown values also fall back to "both".
+# The client<->server tunnel itself always runs over TCP; "udp" only means
+# UDP datagrams are carried inside it. Client and server modes must overlap
+# (e.g. client "udp-only" + server "tcp-only" forwards nothing).
+protocol = "both"
+
+# Worker threads for crypto and I/O. 1/2 suits laptops and matches the
+# built-in defaults; raise on busy machines.
+crypto_threads = 1
+io_threads = 2
+
+# Automatically set the OS proxy (Windows registry / macOS networksetup +
+# launchctl env) to this proxy on startup and restore it on clean exit.
+# Aliases: system_proxy, auto_system_proxy.
+# WARNING: if the client is force-killed, the OS proxy may stay pointed at
+# a dead port and proxy-aware apps lose connectivity until you disable it
+# manually (Windows: Internet Options > Connections > LAN settings).
 auto_sys_proxy = true
 
 [connection]
-# Automatically reconnect if VPN server connection drops
+# Reconnect automatically when the tunnel drops.
 auto_reconnect = true
-# Maximum reconnect attempts before giving up (0 = retry indefinitely)
-reconnect_attempts = 10
-# Delay between reconnect attempts in milliseconds
-reconnect_interval_ms = 3000
-# SOCKS5 handshake timeout in milliseconds
+# Max reconnect attempts. 0 = retry indefinitely. Alias: max_reconnect_attempts.
+reconnect_attempts = 0
+# Wait between attempts. Milliseconds. Alias: reconnect_interval.
+reconnect_interval_ms = 2000
+# Deadline for one SOCKS5 / HTTP CONNECT / SOCKS4 handshake, including slow
+# or fragmented arrivals (reads are deadline-based, not single-recv).
+# Milliseconds. Alias: handshake_timeout.
 handshake_timeout_ms = 3000
-# Direct connection timeout in milliseconds
+# Timeout for DIRECT (bypass) outbound connects. Milliseconds.
+# Alias: connect_timeout. Tunneled connects have no client-side timeout here.
 connect_timeout_ms = 3000
-# Inactive connection teardown timeout in seconds (0 = disabled, default = 300s)
+# Idle teardown for TCP channels, in seconds. 0 = never expire.
+# UDP association mappings use this too, but fall back to 120s when 0.
+# Alias: idle_timeout.
 idle_timeout_sec = 300
-# Keep-alive heartbeat ping interval in seconds to keep NAT sessions active (0 = disabled, default = 30s)
-ping_interval_sec = 30
+# Keep-alive ping to keep NAT sessions open, in seconds. 0 = disabled.
+# Alias: ping_interval.
+ping_interval_sec = 15
 
 [security]
-# Kill Switch: If the VPN server connection drops or fails, block all split-tunnel traffic
-# and prevent unencrypted leakage via direct local network connections.
+# Kill switch: on tunnel loss with auto_reconnect = false, exit immediately
+# instead of leaving bypass/direct paths usable during the outage.
+# With auto_reconnect = true both settings attempt reconnect first.
 kill_switch = false
 
 [performance]
-# Enable TCP_NODELAY (disables Nagle algorithm for lower latency in gaming and voice chat)
+# TCP_NODELAY (disables Nagle) for lower latency in gaming / voice / chat.
+# Alias: nodelay.
 tcp_nodelay = true
 
 [monitoring]
-# Periodically print client traffic statistics (Active tunnels, channels, TX/RX throughput)
-show_stats = false
-stats_interval_sec = 60
+# Periodic traffic summary ([STATS] TX/RX bytes, packets, channel count).
+# Alias: stats.
+show_stats = true
+# Interval for the summary, in seconds. Ignored unless show_stats = true.
+# Alias: stats_interval.
+stats_interval_sec = 10
 
 [logging]
-# Show connections tunneled through the VPN in the console
+# One line per tunneled connection: [TUNNEL] [AppName] -> host:port.
 log_tunnel_traffic = true
-# Show direct local bypass connections in the console (set to false to reduce console clutter)
-log_direct_traffic = false
+# One line per DIRECT (bypassed) connection: [DIRECT] [AppName] -> host:port.
+# Keep true while tuning rules: if Discord shows up here, it is NOT using
+# the VPN (typical cause: raw-IP request + unrecognized process, see below).
+log_direct_traffic = true
 
 [dns]
-# DNS Protection & Routing:
-#   true  - Route DNS queries through encrypted VPN tunnel to prevent ISP tampering/censorship (default).
-#   false - Use local network DNS for direct connections.
+# DNS routing intent (honest scope: there is no TUN interface, so raw
+# UDP/53 from the OS resolver can NEVER enter the SOCKS proxy):
+#   true  - SOCKS-routed DNS (port 53/853, known DNS servers below) plus
+#           known resolver processes are forced through the tunnel, and
+#           tunneled apps are encouraged to resolve server-side.
+#   false - leave DNS to the local network.
+# Alias: route_dns. This does NOT stop ISP DNS poisoning by itself:
+# set the OS DNS manually (1.1.1.1 / 8.8.8.8) and restart tunneled apps.
 tunnel_dns = true
 
-# Custom DNS servers to tunnel (IPs or hostnames/domains).
-# If empty, built-in defaults are used:
-# Cloudflare (1.1.1.1, 1.0.0.1, one.one.one.one, cloudflare-dns.com),
-# Google (8.8.8.8, 8.8.4.4, dns.google),
-# Quad9 (9.9.9.9, 149.112.112.112, dns.quad9.net),
-# AdGuard (94.140.14.14, 94.140.15.15, dns.adguard-dns.com),
-# OpenDNS (208.67.222.222, 208.67.220.220),
-# Mullvad (194.242.2.2, 194.242.2.3, dns.mullvad.net),
-# Control D (76.76.2.0, 76.76.10.0)
+# Extra DNS server IPs/hostnames treated as tunnel-always (in addition to
+# the built-in Cloudflare / Google / Quad9 / AdGuard / OpenDNS / Mullvad /
+# Control D list). Empty = built-ins only. Matched by SOCKS target host.
 dns_servers = [
     # "1.1.1.1",
     # "8.8.8.8"
 ]
 
-# System DNS resolver process names to tunnel.
-# If empty, built-in defaults are used:
-# mDNSResponder (macOS), systemd-resolved (Linux), dnsmasq, named, resolved, dnscrypt-proxy, stubby, unbound
+# Extra resolver process names treated as tunnel-always (in addition to the
+# built-ins: mDNSResponder, systemd-resolved, dnsmasq, named, resolved,
+# dnscrypt-proxy, stubby, unbound). Empty = built-ins only.
 dns_resolvers = [
     # "mDNSResponder",
     # "systemd-resolved"
 ]
 
 [split_tunnel]
-# Modes:
-#   "all"     - Route all network traffic through the encrypted VPN tunnel.
-#   "include" - (Whitelist) Only specified applications/domains route through VPN; all others use direct local internet.
-#   "exclude" - (Blacklist) Specified applications/domains bypass VPN (direct internet); all other apps route through VPN.
+# Routing mode. Case-insensitive; "inc"~"include", "exc"~"exclude" accepted.
+# Unknown values keep the built-in default ("exclude"), so spell carefully.
+#   "all"     - everything via VPN (safest for censorship; highest VPS use).
+#   "include" - whitelist: ONLY listed apps/domains via VPN, rest direct.
+#   "exclude" - blacklist: listed apps/domains direct, everything else via VPN.
 mode = "include"
 
-# Bypass local LAN traffic (192.168.x.x, 10.x.x.x, 172.16-31.x.x, .local) even in "all" mode
+# Bypass private targets without consulting VPN, even in "all" mode:
+# 10/8, 172.16/12, 192.168/16, 169.254/16 link-local, *.local, *.lan,
+# *.home, *.internal. Alias: local_network_bypass.
 bypass_lan = true
 
-# Custom local network IP prefixes or internal domain suffixes to bypass directly (in addition to standard LAN)
+# Extra bypass entries (prefix or suffix match) on top of the standard LAN
+# list, e.g. office subnets or NAS hostnames.
 bypass_lan_ranges = [
     # "192.168.1.0/24",
     # "corp.internal",
     # "nas.home"
 ]
 
-# Target applications to route/bypass (process name or pattern, case-insensitive, .exe optional)
+# App matching (process name, case-insensitive): exact, ".exe"-tolerant
+# ("Discord" matches "Discord.exe"), prefix-with-delimiter ("Discord"
+# matches "Discord Helper", "Discord-Worker"), wildcards ("steam*",
+# "*torrent*", "*cord.exe"), and bundle substring ("discord" matches
+# "com.hnc.Discord"). One entry covers helper/child processes, so listing
+# every "Discord Helper (...)" variant is unnecessary. "ShipIt" is the
+# Discord updater; "curl" is for command-line tests:
+# curl -x socks5h://127.0.0.1:1080 https://discord.com/api/v9/gateway
+# (socks5h = resolve the hostname through the proxy).
 apps = [
     "Discord",
-    "Discord Helper",
     "ShipIt",
-    "Chrome",
     "curl"
 ]
 
-# Target domains or wildcards to route/bypass (e.g. "*.discord.com", "api.github.com")
+# Domain matching (case-insensitive). "*.example.com" matches subdomains
+# ONLY (cdn.example.com), never the bare domain, so list both forms.
+# If the app sends a raw IP (post-DNS SOCKS request, e.g. 162.159.x.x:443),
+# no domain rule can match and the process rule decides; with mode =
+# "include" an unrecognized process ("unknown") goes DIRECT and hits the
+# ISP block. Symptoms and cures: watch log_direct_traffic, test once with
+# mode = "all", prefer socks5h-style hostname requests, fix OS DNS (see
+# [dns] above). UDP voice/media flows via the UDP relay when the app uses
+# SOCKS5 UDP ASSOCIATE; raw UDP that never enters the proxy is not captured.
 domains = [
-    # "*.discord.com",
-    # "*.discordapp.com",
-    # "*.discord.gg"
+    "discord.com",
+    "*.discord.com",
+	"updates.discord.com",
+    "discordapp.com",
+    "*.discordapp.com",
+	"cdn.discordapp.com",
+    "discordapp.net",
+    "*.discordapp.net",
+	"cdn.discordapp.net",
+    "discord.gg",
+    "*.discord.gg",
+    "gateway.discord.gg",
+    "discord.media",
+    "*.discord.media",
+    "discordcdn.com",
+    "*.discordcdn.com",
+    "discordstatus.com",
+    "*.discordstatus.com"
 ]
