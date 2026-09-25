@@ -1,6 +1,6 @@
 [package]
 name = "vpn"
-version = "0.2.10"
+version = "0.2.11"
 alya-version = "0.0.19"
 entry = "src/main.alya"
 description = "High-performance split-tunneling VPN server and client for Alya"
