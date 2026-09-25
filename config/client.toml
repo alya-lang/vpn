@@ -57,7 +57,9 @@ passphrase = "change_me_to_a_secure_shared_passphrase_2026"
 protocol = "both"
 
 # Worker threads for crypto and I/O. 1/2 suits laptops and matches the
-# built-in defaults; raise on busy machines.
+# built-in defaults. Honest note: the per-connection pump does crypto and
+# socket I/O inline, so these threads wait idle (0% CPU) and raising them
+# does NOT speed anything up. Multi-core offload is future work.
 crypto_threads = 1
 io_threads = 2
 
