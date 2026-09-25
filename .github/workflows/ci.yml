@@ -5,15 +5,33 @@ on:
     branches: [main, develop]
   pull_request:
     branches: [main, develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test:
-    name: Test on ${{ matrix.os }}
+    name: Test (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm, macos-latest, macos-15-intel]
+        include:
+          - os: ubuntu-latest
+            label: Linux x64
+          - os: ubuntu-24.04-arm
+            label: Linux ARM64
+          - os: windows-latest
+            label: Windows x64
+          - os: windows-11-arm
+            label: Windows ARM64
+          - os: macos-latest
+            label: macOS ARM64
+          - os: macos-15-intel
+            label: macOS Intel
 
     steps:
       - name: Checkout repository

@@ -31,6 +31,10 @@ jobs:
             platform: x86_64-linux
             binary: alya-vpn
             archive: tar.gz
+          - runner: ubuntu-24.04-arm
+            platform: arm64-linux
+            binary: alya-vpn
+            archive: tar.gz
           - runner: macos-latest
             platform: arm64-macos
             binary: alya-vpn
@@ -41,6 +45,10 @@ jobs:
             archive: tar.gz
           - runner: windows-latest
             platform: x86_64-windows
+            binary: alya-vpn.exe
+            archive: zip
+          - runner: windows-11-arm
+            platform: arm64-windows
             binary: alya-vpn.exe
             archive: zip
 

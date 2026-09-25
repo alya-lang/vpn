@@ -17,8 +17,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     make \
     && rm -rf /var/lib/apt/lists/*
 
+ARG TARGETARCH
+
 # Install Alya Compiler (alya)
-RUN curl -fsSL "https://github.com/alya-lang/alya/releases/download/v${ALYA_VERSION}/alya-v${ALYA_VERSION}-x86_64-linux.tar.gz" | tar -xz --strip-components=1 -C /usr/local/bin \
+RUN case "${TARGETARCH}" in \
+        "amd64") ALYA_ARCH="x86_64-linux" ;; \
+        "arm64") ALYA_ARCH="arm64-linux" ;; \
+        *) ALYA_ARCH="x86_64-linux" ;; \
+    esac && \
+    curl -fsSL "https://github.com/alya-lang/alya/releases/download/v${ALYA_VERSION}/alya-v${ALYA_VERSION}-${ALYA_ARCH}.tar.gz" | tar -xz --strip-components=1 -C /usr/local/bin \
     && chmod +x /usr/local/bin/alya \
     && alya --version
 
