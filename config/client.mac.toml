@@ -1,0 +1,61 @@
+[client]
+bind_address = "127.0.0.1"
+local_proxy_port = 1080
+server_host = "127.0.0.1"
+server_port = 51822
+passphrase = "change_me_to_a_secure_shared_passphrase_2026"
+protocol = "both"
+crypto_threads = 1
+io_threads = 2
+auto_sys_proxy = true
+[connection]
+auto_reconnect = true
+reconnect_attempts = 0
+reconnect_interval_ms = 2000
+handshake_timeout_ms = 3000
+connect_timeout_ms = 3000
+idle_timeout_sec = 300
+ping_interval_sec = 15
+[security]
+kill_switch = false
+[performance]
+tcp_nodelay = true
+[monitoring]
+show_stats = true
+stats_interval_sec = 10
+[logging]
+log_tunnel_traffic = true
+log_direct_traffic = true
+[dns]
+tunnel_dns = true
+dns_servers = [
+]
+dns_resolvers = [
+]
+[split_tunnel]
+mode = "include"
+bypass_lan = true
+bypass_lan_ranges = [
+]
+apps = [
+    "Discord",
+    "ShipIt",
+    "curl"
+]
+domains = [
+    "discord.com",
+    "*.discord.com",
+    "discordapp.com",
+    "*.discordapp.com",
+    "discordapp.net",
+    "*.discordapp.net",
+    "discord.gg",
+    "*.discord.gg",
+    "gateway.discord.gg",
+    "discord.media",
+    "*.discord.media",
+    "discordcdn.com",
+    "*.discordcdn.com",
+    "discordstatus.com",
+    "*.discordstatus.com"
+]

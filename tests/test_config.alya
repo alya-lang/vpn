@@ -161,6 +161,19 @@ function main()
     runner_assert_eq(r, is_bool_str(toml_get(server, "log_connections")), true, "log_connections must be a boolean")
     runner_assert_eq(r, is_bool_str(toml_get(server, "log_client_events")), true, "log_client_events must be a boolean")
 
+    # macOS lean config: comment-free by design (ARM64 runtime chokes on the
+    # documented file), same values as client.toml
+    runner_assert_eq(r, file_exists("config/client.mac.toml"), 1, "config/client.mac.toml must exist")
+    let mac = read_file("config/client.mac.toml")
+    runner_assert_eq(r, str_contains(mac, "#"), false, "mac config must contain no comment lines")
+    let mac_proto = lower(toml_get(mac, "protocol"))
+    runner_assert_eq(r, mac_proto == "tcp" or mac_proto == "udp" or mac_proto == "both", true, "mac protocol must be tcp/udp/both")
+    let mac_mode = lower(toml_get(mac, "mode"))
+    runner_assert_eq(r, mac_mode == "all" or mac_mode == "inc" or mac_mode == "include" or mac_mode == "exc" or mac_mode == "exclude", true, "mac mode must be all/include/exclude")
+    runner_assert_eq(r, len(toml_get(mac, "server_host")) > 0, true, "mac server_host must be set")
+    runner_assert_eq(r, section_contains_active(mac, "[split_tunnel]", "Discord"), true, "mac apps must include Discord")
+    runner_assert_eq(r, section_contains_active(mac, "[split_tunnel]", "discord.com"), true, "mac domains must include Discord")
+
     let failed = runner_summary(r)
     if failed > 0
         exit(1)

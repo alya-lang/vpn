@@ -161,6 +161,17 @@ To route Discord through Alya VPN:
 3. In `config/client.toml`, set `mode = "include"` and `apps = ["discord", "Discord.exe"]`.
 4. Discord traffic will now be detected, matched by the process resolver, encrypted with ChaCha20-Poly1305, and forwarded through your remote VPS.
 
+### macOS notes
+- The Alya runtime on ARM64 Macs can crash (`bus error`) while parsing the
+  documented `config/client.toml`. Use the lean `config/client.mac.toml`
+  instead (same values, no comment lines, short lines):
+  `cp config/client.mac.toml config/client.local.toml`, set `server_host`
+  to the real VPS IP there (never commit the real IP), then
+  `./alya-vpn client --config config/client.local.toml`.
+- If the client still refuses file configs, pass everything via CLI flags
+  (`--server`, `--port`, `--mode`, `--protocol`, `--apps`, `--domains`).
+- Restart Discord AFTER starting the client so it picks up proxy/DNS.
+
 ---
 
 ## 🛠️ CLI Reference
