@@ -2449,9 +2449,311 @@ static int send_all(int sock, const uint8_t *buf, int len) {
     return total;
 }
 
+// ============================================================================
+// DNS Cache (per-thread: single client loop / per-client server threads).
+// Repeated connects to the same host (Discord gateways, browser edges)
+// skip blocking getaddrinfo round-trips. Failures are never cached, and a
+// dead cached edge falls through to fresh DNS below.
+// ============================================================================
+#define ALYA_DNS_CACHE_N 64
+#define ALYA_DNS_CACHE_ADDRS 4
+#define ALYA_DNS_CACHE_TTL_MS 120000
+
+typedef struct {
+    int in_use;
+    char host[256];
+    int n_addrs;
+    int rr;
+    int family[ALYA_DNS_CACHE_ADDRS];
+    int socktype[ALYA_DNS_CACHE_ADDRS];
+    int protocol[ALYA_DNS_CACHE_ADDRS];
+    struct sockaddr_storage addr[ALYA_DNS_CACHE_ADDRS];
+    socklen_t addrlen[ALYA_DNS_CACHE_ADDRS];
+    uint32_t stored_ms;
+} AlyaDnsCacheEntry;
+
+static ALYA_THREAD_LOCAL AlyaDnsCacheEntry s_dns_cache[ALYA_DNS_CACHE_N];
+static ALYA_THREAD_LOCAL int s_dns_cache_evict = 0;
+static volatile uint64_t s_dns_cache_hits = 0;
+static volatile uint64_t s_dns_cache_misses = 0;
+
+static void dns_cache_count_hit(void) {
+#if defined(_WIN32)
+    InterlockedIncrement64((LONG64 volatile *)&s_dns_cache_hits);
+#elif defined(__GNUC__) || defined(__clang__)
+    __atomic_fetch_add(&s_dns_cache_hits, 1, __ATOMIC_RELAXED);
+#else
+    s_dns_cache_hits++;
+#endif
+}
+
+static void dns_cache_count_miss(void) {
+#if defined(_WIN32)
+    InterlockedIncrement64((LONG64 volatile *)&s_dns_cache_misses);
+#elif defined(__GNUC__) || defined(__clang__)
+    __atomic_fetch_add(&s_dns_cache_misses, 1, __ATOMIC_RELAXED);
+#else
+    s_dns_cache_misses++;
+#endif
+}
+
+int alya_vpn_dns_cache_count(void) {
+    int n = 0;
+    uint32_t now = get_time_ms();
+    for (int i = 0; i < ALYA_DNS_CACHE_N; ++i) {
+        if (s_dns_cache[i].in_use && now - s_dns_cache[i].stored_ms <= ALYA_DNS_CACHE_TTL_MS) {
+            n++;
+        }
+    }
+    return n;
+}
+
+uint64_t alya_vpn_dns_cache_hits(void) {
+#if defined(_WIN32)
+    return (uint64_t)InterlockedCompareExchange64((LONG64 volatile *)&s_dns_cache_hits, 0, 0);
+#elif defined(__GNUC__) || defined(__clang__)
+    return __atomic_load_n(&s_dns_cache_hits, __ATOMIC_RELAXED);
+#else
+    return s_dns_cache_hits;
+#endif
+}
+
+void alya_vpn_dns_cache_clear(void) {
+    memset(s_dns_cache, 0, sizeof(s_dns_cache));
+}
+
+// IP literals resolve without DNS traffic; keep them out of the cache.
+static int host_is_literal_ip(const char *host) {
+    uint32_t v4;
+    if (!host || !host[0]) return 1;
+    if (parse_ipv4(host, &v4)) return 1;
+    if (strchr(host, ':') != NULL) return 1;
+    return 0;
+}
+
+static AlyaDnsCacheEntry *dns_cache_find(const char *host) {
+    uint32_t now;
+    int i;
+    if (!host || !host[0]) return NULL;
+    now = get_time_ms();
+    for (i = 0; i < ALYA_DNS_CACHE_N; ++i) {
+        if (s_dns_cache[i].in_use && strcmp(s_dns_cache[i].host, host) == 0) {
+            if (now - s_dns_cache[i].stored_ms <= ALYA_DNS_CACHE_TTL_MS) {
+                return &s_dns_cache[i];
+            }
+            s_dns_cache[i].in_use = 0; // expired
+            return NULL;
+        }
+    }
+    return NULL;
+}
+
+static void dns_cache_store(const char *host, struct addrinfo *res, int socktype) {
+    AlyaDnsCacheEntry *e;
+    int slot;
+    int i;
+    int n;
+    struct addrinfo *p;
+    if (!host || !host[0] || !res) return;
+    if (host_is_literal_ip(host)) return;
+    if (strlen(host) >= 256) return;
+    slot = -1;
+    for (i = 0; i < ALYA_DNS_CACHE_N; ++i) {
+        if (s_dns_cache[i].in_use && strcmp(s_dns_cache[i].host, host) == 0) { slot = i; break; }
+    }
+    if (slot < 0) {
+        for (i = 0; i < ALYA_DNS_CACHE_N; ++i) {
+            if (!s_dns_cache[i].in_use) { slot = i; break; }
+        }
+    }
+    if (slot < 0) {
+        slot = s_dns_cache_evict % ALYA_DNS_CACHE_N;
+        s_dns_cache_evict++;
+    }
+    e = &s_dns_cache[slot];
+    memset(e, 0, sizeof(*e));
+    strncpy(e->host, host, sizeof(e->host) - 1);
+    n = 0;
+    for (p = res; p != NULL && n < ALYA_DNS_CACHE_ADDRS; p = p->ai_next) {
+        if (p->ai_family != AF_INET && p->ai_family != AF_INET6) continue;
+        if (p->ai_socktype != 0 && p->ai_socktype != socktype) continue;
+        if (p->ai_addrlen <= 0 || (size_t)p->ai_addrlen > sizeof(e->addr[n])) continue;
+        e->family[n] = p->ai_family;
+        e->socktype[n] = socktype;
+        e->protocol[n] = p->ai_protocol;
+        memcpy(&e->addr[n], p->ai_addr, p->ai_addrlen);
+        e->addrlen[n] = (socklen_t)p->ai_addrlen;
+        n++;
+    }
+    if (n == 0) return; // nothing usable: leave slot empty
+    e->in_use = 1;
+    e->n_addrs = n;
+    e->rr = 0;
+    e->stored_ms = get_time_ms();
+}
+
+static void sockaddr_set_port(struct sockaddr_storage *ss, int port) {
+    if (!ss) return;
+    if (ss->ss_family == AF_INET) {
+        ((struct sockaddr_in *)ss)->sin_port = htons((uint16_t)port);
+    } else if (ss->ss_family == AF_INET6) {
+        ((struct sockaddr_in6 *)ss)->sin6_port = htons((uint16_t)port);
+    }
+}
+
+// Cached blocking TCP connect (mirrors connect_target socket setup).
+static int connect_cached_tcp(const char *host, int port) {
+    AlyaDnsCacheEntry *e;
+    int start, k;
+    if (!host || !host[0] || port <= 0) return -1;
+    e = dns_cache_find(host);
+    if (!e || e->n_addrs <= 0) {
+        dns_cache_count_miss();
+        return -1;
+    }
+    dns_cache_count_hit();
+    start = e->rr % e->n_addrs;
+    for (k = 0; k < e->n_addrs; ++k) {
+        int idx = (start + k) % e->n_addrs;
+        struct sockaddr_storage ss;
+        int s;
+        memcpy(&ss, &e->addr[idx], sizeof(ss));
+        sockaddr_set_port(&ss, port);
+        s = (int)socket(e->family[idx], e->socktype[idx], e->protocol[idx]);
+        if (s < 0) continue;
+#if defined(SO_NOSIGPIPE)
+        {
+            int opt = 1;
+            setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+        }
+#endif
+        apply_socket_nodelay(s);
+        set_socket_timeout(s, s_connect_timeout_ms);
+        if (connect((SOCKET)s, (struct sockaddr *)&ss, (int)e->addrlen[idx]) == 0) {
+            e->rr = idx + 1;
+            return s;
+        }
+        close_sock(s);
+    }
+    return -1;
+}
+
+// Cached non-blocking TCP connect (mirrors connect_target_async).
+static int connect_cached_tcp_async(const char *host, int port, int *out_connecting) {
+    AlyaDnsCacheEntry *e;
+    int start, k;
+    if (out_connecting) *out_connecting = 0;
+    if (!host || !host[0] || port <= 0) return -1;
+    e = dns_cache_find(host);
+    if (!e || e->n_addrs <= 0) {
+        dns_cache_count_miss();
+        return -1;
+    }
+    dns_cache_count_hit();
+    start = e->rr % e->n_addrs;
+    for (k = 0; k < e->n_addrs; ++k) {
+        int idx = (start + k) % e->n_addrs;
+        struct sockaddr_storage ss;
+        int s;
+        memcpy(&ss, &e->addr[idx], sizeof(ss));
+        sockaddr_set_port(&ss, port);
+        s = (int)socket(e->family[idx], e->socktype[idx], e->protocol[idx]);
+        if (s < 0) continue;
+#if defined(SO_NOSIGPIPE)
+        {
+            int opt = 1;
+            setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+        }
+#endif
+        set_sock_nonblocking(s);
+        apply_socket_nodelay(s);
+        {
+            int cr = connect((SOCKET)s, (struct sockaddr *)&ss, (int)e->addrlen[idx]);
+            if (cr == 0) {
+                e->rr = idx + 1;
+                return s;
+            }
+#if defined(_WIN32)
+            {
+                int err = WSAGetLastError();
+                if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS) {
+                    e->rr = idx + 1;
+                    if (out_connecting) *out_connecting = 1;
+                    return s;
+                }
+            }
+#else
+            if (errno == EINPROGRESS || errno == EWOULDBLOCK) {
+                e->rr = idx + 1;
+                if (out_connecting) *out_connecting = 1;
+                return s;
+            }
+#endif
+        }
+        close_sock(s);
+    }
+    return -1;
+}
+
+// Cached connected-UDP socket (mirrors connect_udp_target setup).
+static int connect_cached_udp(const char *host, int port) {
+    AlyaDnsCacheEntry *e;
+    int start, k;
+    if (!host || !host[0] || port <= 0) return -1;
+    e = dns_cache_find(host);
+    if (!e || e->n_addrs <= 0) {
+        dns_cache_count_miss();
+        return -1;
+    }
+    dns_cache_count_hit();
+    start = e->rr % e->n_addrs;
+    for (k = 0; k < e->n_addrs; ++k) {
+        int idx = (start + k) % e->n_addrs;
+        struct sockaddr_storage ss;
+        int s;
+        memcpy(&ss, &e->addr[idx], sizeof(ss));
+        sockaddr_set_port(&ss, port);
+        s = (int)socket(e->family[idx], e->socktype[idx], e->protocol[idx]);
+        if (s < 0) continue;
+#if defined(SO_NOSIGPIPE)
+        {
+            int opt = 1;
+            setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &opt, sizeof(opt));
+        }
+#endif
+        set_sock_nonblocking(s);
+        if (connect((SOCKET)s, (struct sockaddr *)&ss, (int)e->addrlen[idx]) == 0) {
+            e->rr = idx + 1;
+            return s;
+        }
+#if !defined(_WIN32)
+        if (errno == EINPROGRESS || errno == EWOULDBLOCK) {
+            e->rr = idx + 1;
+            return s;
+        }
+#else
+        {
+            int err = WSAGetLastError();
+            if (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS) {
+                e->rr = idx + 1;
+                return s;
+            }
+        }
+#endif
+        close_sock(s);
+    }
+    return -1;
+}
+
 static int connect_target(const char *host, int port) {
     char port_str[16];
     snprintf(port_str, sizeof(port_str), "%d", port);
+
+    // 0. Cached addresses first (round-robin, stale falls through below).
+    {
+        int cs = connect_cached_tcp(host, port);
+        if (cs >= 0) return cs;
+    }
 
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
@@ -2466,6 +2768,9 @@ static int connect_target(const char *host, int port) {
             return -1;
         }
     }
+    dns_cache_store(host, res, SOCK_STREAM);
+
+    dns_cache_store(host, res, SOCK_STREAM);
 
     int target_sock = -1;
     for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
@@ -2491,6 +2796,13 @@ static int connect_target(const char *host, int port) {
 
 static int connect_target_async(const char *host, int port, int *out_connecting) {
     if (out_connecting) *out_connecting = 0;
+
+    // 0. Cached addresses first (round-robin, stale falls through below).
+    {
+        int cs = connect_cached_tcp_async(host, port, out_connecting);
+        if (cs >= 0) return cs;
+    }
+
     char port_str[16];
     snprintf(port_str, sizeof(port_str), "%d", port);
 
@@ -2506,6 +2818,8 @@ static int connect_target_async(const char *host, int port, int *out_connecting)
             return -1;
         }
     }
+
+    dns_cache_store(host, res, SOCK_STREAM);
 
     int target_sock = -1;
     for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
@@ -3023,6 +3337,13 @@ static int sock_local_family(int sock) {
 static int connect_udp_target(const char *host, int port) {
     char port_str[16];
     snprintf(port_str, sizeof(port_str), "%d", port);
+
+    // 0. Cached addresses first (round-robin, stale falls through below).
+    {
+        int cs = connect_cached_udp(host, port);
+        if (cs >= 0) return cs;
+    }
+
     struct addrinfo hints;
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
@@ -3032,6 +3353,7 @@ static int connect_udp_target(const char *host, int port) {
         hints.ai_family = AF_UNSPEC;
         if (getaddrinfo(host, port_str, &hints, &res) != 0 || !res) return -1;
     }
+    dns_cache_store(host, res, SOCK_DGRAM);
     int s = -1;
     for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
         int fd = (int)socket(p->ai_family, p->ai_socktype, p->ai_protocol);

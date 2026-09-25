@@ -98,6 +98,10 @@ jobs:
         run: |
           alya run tests/test_hardening.alya
 
+      - name: Run DNS cache test suite
+        run: |
+          alya run tests/test_dns_cache.alya
+
       - name: Run benchmark
         run: |
           alya run src/main.alya -- benchmark

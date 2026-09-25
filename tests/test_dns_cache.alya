@@ -1,0 +1,41 @@
+# Unit tests for the DNS cache: repeated resolves skip blocking getaddrinfo.
+# Uses localhost (always resolvable, connection refused on port 9) through
+# the direct-open path, which resolves before connecting.
+import "std/test"
+import "std/net" as net
+import "../src/ffi.alya"
+
+function main()
+    test_suite("DNS Cache Suite")
+    let r = runner_new()
+
+    alya_vpn_dns_cache_clear()
+    runner_assert_eq(r, alya_vpn_dns_cache_count(), 0, "Cache starts empty")
+
+    let lsock = alya_vpn_tcp_listen("127.0.0.1", 0, 8)
+    runner_assert_eq(r, lsock >= 0, true, "Listen socket available as app_sock stand-in")
+
+    # First resolve: cache miss, entry stored (connect itself is refused).
+    alya_vpn_open_direct(lsock, "localhost", 9)
+    runner_assert_eq(r, alya_vpn_dns_cache_count(), 1, "localhost cached after first resolve")
+
+    # Second resolve: served from cache.
+    alya_vpn_open_direct(lsock, "localhost", 9)
+    runner_assert_eq(r, alya_vpn_dns_cache_hits(), 1, "Second resolve served from cache")
+
+    # IP literals bypass the cache (no DNS traffic involved).
+    alya_vpn_open_direct(lsock, "127.0.0.1", 9)
+    runner_assert_eq(r, alya_vpn_dns_cache_count(), 1, "IP literals are not cached")
+
+    alya_vpn_direct_clear()
+    alya_vpn_dns_cache_clear()
+    runner_assert_eq(r, alya_vpn_dns_cache_count(), 0, "Cache clear empties entries")
+    net::tcp_close(lsock)
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()
