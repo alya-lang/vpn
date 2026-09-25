@@ -81,3 +81,69 @@ jobs:
       - name: Run benchmark
         run: |
           alya run src/main.alya -- benchmark
+
+      # TEMP-DIAG: full discovery run (incl. scratch). Non-blocking on
+      # purpose: we only want the log while diagnosing the macOS bus error.
+      # TODO(remove after diagnosis): delete this step.
+      - name: TEMP DIAG full alya test discovery
+        continue-on-error: true
+        run: |
+          alya test
+
+      # TEMP-DIAG: start the real client on the commented config and capture
+      # whether it prints the banner (clean) or dies by signal (bus error).
+      # --no-system-proxy keeps the runner proxy untouched. The bundled
+      # server_host is an unresolvable placeholder, so a clean client exits
+      # fast on connect; the banner + exit code are the signals we check.
+      # no banner + exit 138/134 = bus error reproduced in run-mode.
+      # TODO(remove after diagnosis): delete this step.
+      - name: TEMP DIAG client startup on commented config
+        shell: bash
+        run: |
+          alya run src/main.alya -- client --config config/client.toml --no-system-proxy > /tmp/vpnclient-probe.log 2>&1 &
+          CLIENT_PID=$!
+          sleep 90
+          echo "--- probe log head ---"
+          head -30 /tmp/vpnclient-probe.log || true
+          kill $CLIENT_PID 2>/dev/null || true
+          sleep 2
+          kill -9 $CLIENT_PID 2>/dev/null || true
+          wait $CLIENT_PID 2>/dev/null; CODE=$?; echo "client exit code: $CODE"
+          echo "--- banner check ---"
+          grep -c "Alya VPN Client Active" /tmp/vpnclient-probe.log || true
+
+      - name: Build standalone binary
+        run: |
+          alya build src/main.alya -o alya-vpn-ci
+
+      # TEMP-DIAG: exercise the BUILT binary. The bus error only ever shows
+      # in build output, never under `alya run`, so this is the decisive
+      # probe: same config, same machine, different artifact.
+      # TODO(remove after diagnosis): delete this step.
+      - name: TEMP DIAG probe built binary
+        shell: bash
+        run: |
+          BIN=./alya-vpn-ci
+          if [ -f "$BIN.exe" ]; then BIN="$BIN.exe"; fi
+          "$BIN" check-port 1080 || true
+          "$BIN" benchmark || true
+          "$BIN" client --config config/client.toml --no-system-proxy > /tmp/vpnbuilt-probe.log 2>&1 &
+          CLIENT_PID=$!
+          sleep 60
+          echo "--- built probe log head ---"
+          head -30 /tmp/vpnbuilt-probe.log || true
+          kill $CLIENT_PID 2>/dev/null || true
+          sleep 2
+          kill -9 $CLIENT_PID 2>/dev/null || true
+          wait $CLIENT_PID 2>/dev/null; CODE=$?; echo "built client exit code: $CODE"
+          echo "--- banner check ---"
+          grep -c "Alya VPN Client Active" /tmp/vpnbuilt-probe.log || true
+
+      # TEMP-DIAG: keep the built binaries so a real Mac can test whether a
+      # CI-built artifact also bus-errors (separates "local build env" from
+      # "codegen"). TODO(remove after diagnosis): delete this step.
+      - name: TEMP DIAG upload built binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: alya-vpn-${{ matrix.os }}
+          path: alya-vpn-ci*
