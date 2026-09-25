@@ -6,17 +6,26 @@ function main()
     test_suite("Forward Protocol Mode Suite")
     let r = runner_new()
 
-    runner_assert_eq(r, proto::parse_forward_protocol("tcp"), 1, "tcp parses to 1")
-    runner_assert_eq(r, proto::parse_forward_protocol("TCP"), 1, "TCP parses to 1")
-    runner_assert_eq(r, proto::parse_forward_protocol("udp"), 2, "udp parses to 2")
-    runner_assert_eq(r, proto::parse_forward_protocol("UDP"), 2, "UDP parses to 2")
-    runner_assert_eq(r, proto::parse_forward_protocol("both"), 3, "both parses to 3")
-    runner_assert_eq(r, proto::parse_forward_protocol("BOTH"), 3, "BOTH parses to 3")
-    runner_assert_eq(r, proto::parse_forward_protocol(""), 3, "empty defaults to both")
-    runner_assert_eq(r, proto::parse_forward_protocol("garbage"), 3, "unknown defaults to both")
-    runner_assert_eq(r, proto::fwd_tcp_only(), 1, "fwd_tcp_only is 1")
-    runner_assert_eq(r, proto::fwd_udp_only(), 2, "fwd_udp_only is 2")
-    runner_assert_eq(r, proto::fwd_both(), 3, "fwd_both is 3")
+    runner_assert_eq(r, proto::ForwardProtocol.TcpOnly as int, 1, "TcpOnly discriminant is 1")
+    runner_assert_eq(r, proto::ForwardProtocol.UdpOnly as int, 2, "UdpOnly discriminant is 2")
+    runner_assert_eq(r, proto::ForwardProtocol.Both as int, 3, "Both discriminant is 3")
+
+    runner_assert_eq(r, proto::parse_forward_protocol("tcp") as int, 1, "tcp parses to TcpOnly")
+    runner_assert_eq(r, proto::parse_forward_protocol("TCP") as int, 1, "TCP parses to TcpOnly")
+    runner_assert_eq(r, proto::parse_forward_protocol("tcp-only") as int, 1, "tcp-only parses to TcpOnly")
+    runner_assert_eq(r, proto::parse_forward_protocol("udp") as int, 2, "udp parses to UdpOnly")
+    runner_assert_eq(r, proto::parse_forward_protocol("UDP") as int, 2, "UDP parses to UdpOnly")
+    runner_assert_eq(r, proto::parse_forward_protocol("both") as int, 3, "both parses to Both")
+    runner_assert_eq(r, proto::parse_forward_protocol("BOTH") as int, 3, "BOTH parses to Both")
+    runner_assert_eq(r, proto::parse_forward_protocol("") as int, 3, "empty defaults to Both")
+    runner_assert_eq(r, proto::parse_forward_protocol("garbage") as int, 3, "unknown defaults to Both")
+
+    let label = when proto::parse_forward_protocol("udp")
+        is proto::ForwardProtocol.TcpOnly => "tcp"
+        is proto::ForwardProtocol.UdpOnly => "udp"
+        is proto::ForwardProtocol.Both => "both"
+    end
+    runner_assert_eq(r, label, "udp", "when matches enum variants")
 
     let failed = runner_summary(r)
     if failed > 0

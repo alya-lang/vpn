@@ -17,22 +17,22 @@ function msg_pong() return 8 end
 function proto_tcp() return 1 end
 function proto_udp() return 2 end
 
-# Forward protocol modes (client <-> server agreement on allowed payload types)
-function fwd_tcp_only() return 1 end
-function fwd_udp_only() return 2 end
-function fwd_both() return 3 end
+# Forward protocol modes: which forwarded payload types client and server
+# agree to carry. Integer-backed (1/2/3) for the native FFI boundary.
+enum ForwardProtocol
+    TcpOnly = 1
+    UdpOnly = 2
+    Both = 3
+end
 
 # Parses a "protocol" config value ("tcp" / "udp" / "both", case-insensitive).
-# Returns 1 (TCP only), 2 (UDP only) or 3 (both, default).
-function parse_forward_protocol(s)
-    let v = lower(s)
-    if v == "tcp" or v == "tcp-only" or v == "tcp_only"
-        return 1
+# Unknown values fall back to Both.
+function parse_forward_protocol(s) -> ForwardProtocol
+    return when lower(s)
+        is "tcp", "tcp-only", "tcp_only" => ForwardProtocol.TcpOnly
+        is "udp", "udp-only", "udp_only" => ForwardProtocol.UdpOnly
+        else => ForwardProtocol.Both
     end
-    if v == "udp" or v == "udp-only" or v == "udp_only"
-        return 2
-    end
-    return 3
 end
 
 # Status Codes

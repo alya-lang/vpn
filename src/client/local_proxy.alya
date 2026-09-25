@@ -122,11 +122,12 @@ function vpn_run_client_proxy(cfg)
     # 8. UDP relay for SOCKS5 UDP ASSOCIATE (UDP-over-TCP tunnel).
     # Disabled in TCP-only mode. Binds proxy_port+1 with ephemeral fallback.
     let udp_relay_port = -1
-    if forward_protocol == 2 or forward_protocol == 3
-        udp_relay_port = alya_vpn_udp_relay_init(bind_address, local_port + 1)
-        if udp_relay_port < 0
-            say("[WARN] UDP relay unavailable, continuing with TCP only")
-        end
+    when forward_protocol
+        is 2, 3
+            udp_relay_port = alya_vpn_udp_relay_init(bind_address, local_port + 1)
+            if udp_relay_port < 0
+                say("[WARN] UDP relay unavailable, continuing with TCP only")
+            end
     end
 
     let proxy_sock = alya_vpn_tcp_listen(bind_address, local_port, 64)
@@ -177,11 +178,10 @@ function vpn_run_client_proxy(cfg)
     say("[INFO] Local SOCKS5 Proxy: " + bind_address + ":" + local_port)
     say("[INFO] Remote VPN Server:  " + server_host + ":" + server_port)
     say("[INFO] Split Tunnel Mode:  " + mode_str)
-    let proto_str = "TCP+UDP (UDP-over-TCP tunnel)"
-    if forward_protocol == 1
-        proto_str = "TCP only"
-    else if forward_protocol == 2
-        proto_str = "UDP only (UDP-over-TCP tunnel)"
+    let proto_str = when forward_protocol
+        is 1 => "TCP only"
+        is 2 => "UDP only (UDP-over-TCP tunnel)"
+        else => "TCP+UDP (UDP-over-TCP tunnel)"
     end
     say("[INFO] Forward Protocol:  " + proto_str)
     if udp_relay_port > 0
@@ -242,60 +242,61 @@ function vpn_run_client_proxy(cfg)
                 end
 
                 let ok, host, port = parse_socks5_request(app_sock)
-                if ok == 2
-                    # UDP ASSOCIATE: TCP control socket is owned by native
-                    # code from here on; relay address was already reported
-                    # in the handshake reply. Never close it here.
-                    if log_tunnel_traffic == 1
-                        say("[UDP-ASSOC] [" + proc_name + "] relay " + bind_address + ":" + udp_relay_port)
-                    end
-                else if ok == 1
-                    if proc_name == "unknown"
-                        let inf_buf = "" + crypto::alloc_str(260)
-                        let inf_res = alya_vpn_infer_process_from_host(host, inf_buf, 256)
-                        if inf_res == 1
-                            let inf_name = resolver::extract_c_string(inf_buf)
-                            if len(inf_name) > 0
-                                proc_name = inf_name
+                when ok
+                    is 2
+                        # UDP ASSOCIATE: TCP control socket is owned by native
+                        # code from here on; relay address was already reported
+                        # in the handshake reply. Never close it here.
+                        if log_tunnel_traffic == 1
+                            say("[UDP-ASSOC] [" + proc_name + "] relay " + bind_address + ":" + udp_relay_port)
+                        end
+                    is 1
+                        if proc_name == "unknown"
+                            let inf_buf = "" + crypto::alloc_str(260)
+                            let inf_res = alya_vpn_infer_process_from_host(host, inf_buf, 256)
+                            if inf_res == 1
+                                let inf_name = resolver::extract_c_string(inf_buf)
+                                if len(inf_name) > 0
+                                    proc_name = inf_name
+                                end
                             end
                         end
-                    end
 
-                    if host == "127.0.0.1" or host == "localhost" or host == "::1"
-                        route_vpn = 0
-                    else
-                        let host_route = alya_vpn_should_route_host(host, port)
-                        if host_route == 1
-                            route_vpn = 1
-                        else if host_route == 0
+                        if host == "127.0.0.1" or host == "localhost" or host == "::1"
                             route_vpn = 0
-                        end
-                    end
-
-                    if route_vpn != 0
-                        if log_tunnel_traffic == 1
-                            say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Channel " + next_channel_id + ")")
-                        end
-                        let res = alya_vpn_open_client_channel(vpn_sock, next_channel_id, host, port, app_sock)
-                        if res == -2
-                            say("[PROTO] [ " + proc_name + "] -> " + host + ":" + port + " refused (protocol mode forbids TCP)")
-                            net::tcp_close(app_sock)
-                        else if res < 0
-                            net::tcp_close(app_sock)
                         else
-                            next_channel_id += 1
+                            let host_route = alya_vpn_should_route_host(host, port)
+                            if host_route == 1
+                                route_vpn = 1
+                            else if host_route == 0
+                                route_vpn = 0
+                            end
+                        end
+
+                        if route_vpn != 0
+                            if log_tunnel_traffic == 1
+                                say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Channel " + next_channel_id + ")")
+                            end
+                            let res = alya_vpn_open_client_channel(vpn_sock, next_channel_id, host, port, app_sock)
+                            if res == -2
+                                say("[PROTO] [ " + proc_name + "] -> " + host + ":" + port + " refused (protocol mode forbids TCP)")
+                                net::tcp_close(app_sock)
+                            else if res < 0
+                                net::tcp_close(app_sock)
+                            else
+                                next_channel_id += 1
+                            end
+                        else
+                            if log_direct_traffic == 1
+                                say("[DIRECT] [" + proc_name + "] -> " + host + ":" + port + " (Bypassing VPN)")
+                            end
+                            let res = alya_vpn_open_direct(app_sock, host, port)
+                            if res < 0
+                                net::tcp_close(app_sock)
+                            end
                         end
                     else
-                        if log_direct_traffic == 1
-                            say("[DIRECT] [" + proc_name + "] -> " + host + ":" + port + " (Bypassing VPN)")
-                        end
-                        let res = alya_vpn_open_direct(app_sock, host, port)
-                        if res < 0
-                            net::tcp_close(app_sock)
-                        end
-                    end
-                else
-                    net::tcp_close(app_sock)
+                        net::tcp_close(app_sock)
                 end
             end
         end

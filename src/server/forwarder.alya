@@ -21,10 +21,7 @@ function vpn_run_server(cfg, client_thread_handler)
     let allowed_clients = cfg["allowed_clients"]
     let bind_address = cfg["bind_address"]
     let block_lan = cfg["block_lan_destinations"]
-    let forward_protocol = 3
-    if cfg["forward_protocol"] != null and cfg["forward_protocol"] >= 1
-        forward_protocol = cfg["forward_protocol"]
-    end
+    let forward_protocol = cfg["forward_protocol"] ?? 3
     let blocked_ports = cfg["blocked_ports"]
     let idle_timeout_sec = cfg["idle_timeout_sec"]
     let show_stats = cfg["show_stats"]
@@ -76,11 +73,10 @@ function vpn_run_server(cfg, client_thread_handler)
     if block_lan == 0
         ssrf_str = "DISABLED"
     end
-    let proto_str = "TCP+UDP (UDP-over-TCP tunnel)"
-    if forward_protocol == 1
-        proto_str = "TCP only"
-    else if forward_protocol == 2
-        proto_str = "UDP only (UDP-over-TCP tunnel)"
+    let proto_str = when forward_protocol
+        is 1 => "TCP only"
+        is 2 => "UDP only (UDP-over-TCP tunnel)"
+        else => "TCP+UDP (UDP-over-TCP tunnel)"
     end
 
     say("[INFO] ========================================")

@@ -584,7 +584,7 @@ function main()
             "bind_address": bind_address,
             "port": port,
             "passphrase": pass,
-            "forward_protocol": proto::parse_forward_protocol(forward_protocol_str),
+            "forward_protocol": proto::parse_forward_protocol(forward_protocol_str) as int,
             "crypto_threads": crypto_threads,
             "io_threads": io_threads,
             "backlog": backlog,
@@ -652,13 +652,11 @@ function main()
             end
             crypto_threads = file_cfg["crypto_threads"]
             io_threads = file_cfg["io_threads"]
-            let m = lower(file_cfg["mode"])
-            if m == "all"
-                split_mode = router::mode_all()
-            else if m == "inc" or m == "include"
-                split_mode = router::mode_include()
-            else if m == "exc" or m == "exclude"
-                split_mode = router::mode_exclude()
+            split_mode = when lower(file_cfg["mode"])
+                is "all" => router::mode_all()
+                is "inc", "include" => router::mode_include()
+                is "exc", "exclude" => router::mode_exclude()
+                else => split_mode
             end
             if file_cfg["system_proxy"] == "true" or file_cfg["system_proxy"] == "1" or file_cfg["auto_sys_proxy"] == "true" or file_cfg["auto_sys_proxy"] == "1"
                 auto_sys_proxy = 1
@@ -746,13 +744,11 @@ function main()
                     end
                     crypto_threads = custom_cfg["crypto_threads"]
                     io_threads = custom_cfg["io_threads"]
-                    let m = lower(custom_cfg["mode"])
-                    if m == "all"
-                        split_mode = router::mode_all()
-                    else if m == "inc" or m == "include"
-                        split_mode = router::mode_include()
-                    else if m == "exc" or m == "exclude"
-                        split_mode = router::mode_exclude()
+                    split_mode = when lower(custom_cfg["mode"])
+                        is "all" => router::mode_all()
+                        is "inc", "include" => router::mode_include()
+                        is "exc", "exclude" => router::mode_exclude()
+                        else => split_mode
                     end
                     if custom_cfg["system_proxy"] == "true" or custom_cfg["system_proxy"] == "1" or custom_cfg["auto_sys_proxy"] == "true" or custom_cfg["auto_sys_proxy"] == "1"
                         auto_sys_proxy = 1
@@ -842,13 +838,11 @@ function main()
                 pass = args_list[i + 1]
                 i += 2
             else if args_list[i] == "--mode" and i + 1 < len(args_list)
-                let m = lower(args_list[i + 1])
-                if m == "all"
-                    split_mode = router::mode_all()
-                else if m == "inc" or m == "include"
-                    split_mode = router::mode_include()
-                else if m == "exc" or m == "exclude"
-                    split_mode = router::mode_exclude()
+                split_mode = when lower(args_list[i + 1])
+                    is "all" => router::mode_all()
+                    is "inc", "include" => router::mode_include()
+                    is "exc", "exclude" => router::mode_exclude()
+                    else => split_mode
                 end
                 i += 2
             else if args_list[i] == "--apps" and i + 1 < len(args_list)
@@ -996,7 +990,7 @@ function main()
             "server_host": srv_host,
             "server_port": srv_port,
             "passphrase": pass,
-            "forward_protocol": proto::parse_forward_protocol(forward_protocol_str),
+            "forward_protocol": proto::parse_forward_protocol(forward_protocol_str) as int,
             "split_mode": split_mode,
             "apps": app_list,
             "domains": domain_list,
