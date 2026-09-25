@@ -56,6 +56,9 @@ static void __attribute__((constructor)) init_unbuffered_io(void) {
 #endif
 
 
+// Forward declaration (defined further below; needed by earlier Apple code).
+static uint32_t get_time_ms(void);
+
 #if defined(_WIN32)
 #define WIN32_LEAN_AND_MEAN
 #include <winsock2.h>
