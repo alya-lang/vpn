@@ -86,7 +86,7 @@ idle_timeout_sec = 300
 
 [monitoring]
 # Periodic traffic summary (active clients/channels, TX/RX). Alias: stats.
-show_stats = false
+show_stats = true
 # Summary interval, in seconds. Ignored unless show_stats = true.
 # Alias: stats_interval.
 stats_interval_sec = 60
