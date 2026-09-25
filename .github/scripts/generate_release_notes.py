@@ -96,7 +96,7 @@ def main():
             tag = run_git(["describe", "--tags", "--abbrev=0"], check=False)
 
     if not tag:
-        tag = "v0.2.11"
+        tag = "v0.2.12"
 
     # 2. Resolve Repository Slug (e.g. alya-lang/vpn)
     repo = os.environ.get("GITHUB_REPOSITORY", "")
@@ -112,7 +112,7 @@ def main():
 
     repo_url = f"https://github.com/{repo}"
 
-    # 3. Release Title: "Alya VPN <version>" (e.g. "Alya VPN v0.2.6")
+    # 3. Release Title: "Alya VPN <version>" (e.g. "Alya VPN v0.2.12")
     title_version = tag if tag.startswith("v") else f"v{tag}"
     title = f"Alya VPN {title_version}"
 
