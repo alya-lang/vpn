@@ -24,6 +24,16 @@ function parse_socks5_request(client_sock)
     return 1, host, port
 end
 
+# Display label for logs: unresolved processes show their peer port
+# ([unknown:51234]) so they can be correlated with netstat/lsof output.
+# Routing and host-inference keep using the raw "unknown" value.
+function proc_display_name(proc_name, peer_port)
+    if proc_name == "unknown"
+        return "unknown:" + peer_port
+    end
+    return proc_name
+end
+
 # Starts the local SOCKS5 proxy and routes traffic according to split-tunneling configuration
 function vpn_run_client_proxy(cfg)
     let local_port = cfg["local_port"]
@@ -248,7 +258,7 @@ function vpn_run_client_proxy(cfg)
                         # code from here on; relay address was already reported
                         # in the handshake reply. Never close it here.
                         if log_tunnel_traffic == 1
-                            say("[UDP-ASSOC] [" + proc_name + "] relay " + bind_address + ":" + udp_relay_port)
+                            say("[UDP-ASSOC] [" + proc_display_name(proc_name, peer_port) + "] relay " + bind_address + ":" + udp_relay_port)
                         end
                     is 1
                         if proc_name == "unknown"
@@ -275,7 +285,7 @@ function vpn_run_client_proxy(cfg)
 
                         if route_vpn != 0
                             if log_tunnel_traffic == 1
-                                say("[TUNNEL] [" + proc_name + "] -> " + host + ":" + port + " (Channel " + next_channel_id + ")")
+                                say("[TUNNEL] [" + proc_display_name(proc_name, peer_port) + "] -> " + host + ":" + port + " (Channel " + next_channel_id + ")")
                             end
                             let res = alya_vpn_open_client_channel(vpn_sock, next_channel_id, host, port, app_sock)
                             if res == -2
@@ -288,7 +298,7 @@ function vpn_run_client_proxy(cfg)
                             end
                         else
                             if log_direct_traffic == 1
-                                say("[DIRECT] [" + proc_name + "] -> " + host + ":" + port + " (Bypassing VPN)")
+                                say("[DIRECT] [" + proc_display_name(proc_name, peer_port) + "] -> " + host + ":" + port + " (Bypassing VPN)")
                             end
                             let res = alya_vpn_open_direct(app_sock, host, port)
                             if res < 0

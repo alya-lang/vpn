@@ -1,0 +1,20 @@
+# Unit tests for client log labels (unknown processes carry peer port).
+import "std/test"
+import "../src/client/local_proxy.alya" as proxy
+
+function main()
+    test_suite("Client Log Label Suite")
+    let r = runner_new()
+
+    runner_assert_str_eq(r, proxy::proc_display_name("unknown", 51234), "unknown:51234", "Unknown shows peer port for correlation")
+    runner_assert_str_eq(r, proxy::proc_display_name("unknown", 1), "unknown:1", "Low peer port formats correctly")
+    runner_assert_str_eq(r, proxy::proc_display_name("Discord", 51234), "Discord", "Known process shows bare name")
+    runner_assert_str_eq(r, proxy::proc_display_name("Discord Helper (Renderer)", 0), "Discord Helper (Renderer)", "Helper name passes through untouched")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

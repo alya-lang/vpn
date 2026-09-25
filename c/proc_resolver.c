@@ -694,11 +694,12 @@ int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port
     free(pids);
 
     // Fallback using lsof for short-lived or race sockets, rate-limited:
-    // an unbounded popen per unresolved connection fork-storms under churn.
+    // an unbounded popen per unresolved connection fork-storms under churn
+    // (Discord opens bursts of short connections at startup).
     static uint32_t s_last_lsof_ms = 0;
     uint32_t now_lsof = get_time_ms();
     if (!found && peer_remote_port > 0 &&
-        (s_last_lsof_ms == 0 || now_lsof - s_last_lsof_ms > 2000)) {
+        (s_last_lsof_ms == 0 || now_lsof - s_last_lsof_ms > 500)) {
         s_last_lsof_ms = now_lsof;
         char cmd[128];
         snprintf(cmd, sizeof(cmd), "lsof -n -P -iTCP:%d -sTCP:ESTABLISHED -F c 2>/dev/null", peer_remote_port);
