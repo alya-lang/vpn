@@ -7,6 +7,7 @@ import "./client/resolver.alya" as resolver
 import "./client/router.alya" as router
 import "./common/crypto.alya" as crypto
 import "./common/protocol.alya" as proto
+import "./common/logging.alya" as vlog
 
 function print_banner()
     say("=================================================================")
@@ -24,6 +25,8 @@ function print_usage()
     say("    --port <port>             Listen port (default: 51822)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
     say("    --protocol <mode>         Forwarded payloads: tcp, udp or both (default: both)")
+    say("    --log-level <name>        debug, info, warn or error (default: info, overrides toggles)")
+    say("    --health-port <port>      Loopback JSON health endpoint (default: 0 = disabled)")
     say("    --backlog <N>             Pending connection queue (default: 128)")
     say("    --max-clients <N>         Max concurrent clients (default: 100)")
     say("    --block-lan <bool>        SSRF protection: block internal LAN destinations (default: true)")
@@ -44,6 +47,7 @@ function print_usage()
     say("    --udp-port <port>         UDP relay port (default: 0 = proxy_port+1)")
     say("    --pass <secret>           Shared passphrase for AEAD encryption")
     say("    --protocol <mode>         Forwarded payloads: tcp, udp or both (default: both)")
+    say("    --log-level <name>        debug, info, warn or error (default: info, overrides toggles)")
     say("    --mode <all|inc|exc>      Split-tunnel mode:")
     say("                                all: Route everything via VPN")
     say("                                inc: ONLY listed apps/domains use VPN")
@@ -116,6 +120,7 @@ function load_client_config(config_path)
         "bind_address": "127.0.0.1",
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "protocol": "both",
+        "log_level": "",
         "mode": "exclude",
         "system_proxy": "true",
         "auto_sys_proxy": "true",
@@ -168,6 +173,8 @@ function load_client_config(config_path)
                 cfg["passphrase"] = strip_val(val)
             else if key == "protocol" or key == "forward_protocol"
                 cfg["protocol"] = strip_val(val)
+            else if key == "log_level"
+                cfg["log_level"] = strip_val(val)
             else if key == "mode"
                 cfg["mode"] = strip_val(val)
             else if key == "system_proxy" or key == "auto_system_proxy" or key == "auto_sys_proxy"
@@ -270,10 +277,12 @@ function load_server_config(config_path)
         "port": 51822,
         "passphrase": "change_me_to_a_secure_shared_passphrase_2026",
         "protocol": "both",
+        "log_level": "",
         "crypto_threads": 2,
         "io_threads": 4,
         "backlog": 128,
         "max_clients": 100,
+        "health_port": 0,
         "block_lan_destinations": "true",
         "blocked_ports": [],
         "idle_timeout_sec": 300,
@@ -304,6 +313,10 @@ function load_server_config(config_path)
                 cfg["passphrase"] = strip_val(val)
             else if key == "protocol" or key == "forward_protocol"
                 cfg["protocol"] = strip_val(val)
+            else if key == "log_level"
+                cfg["log_level"] = strip_val(val)
+            else if key == "health_port"
+                cfg["health_port"] = proto::parse_number(strip_val(val))
             else if key == "crypto_threads"
                 cfg["crypto_threads"] = proto::parse_number(strip_val(val))
             else if key == "io_threads"
@@ -404,6 +417,8 @@ function main()
         let port = 51822
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let forward_protocol_str = "both"
+        let log_level_str = ""
+        let health_port = 0
         let crypto_threads = 2
         let io_threads = 4
         let backlog = 128
@@ -429,6 +444,12 @@ function main()
             pass = file_cfg["passphrase"]
             if file_cfg["protocol"] != null and len(file_cfg["protocol"]) > 0
                 forward_protocol_str = file_cfg["protocol"]
+            end
+            if file_cfg["log_level"] != null and len(file_cfg["log_level"]) > 0
+                log_level_str = file_cfg["log_level"]
+            end
+            if file_cfg["health_port"] != null and file_cfg["health_port"] >= 0
+                health_port = file_cfg["health_port"]
             end
             crypto_threads = file_cfg["crypto_threads"]
             io_threads = file_cfg["io_threads"]
@@ -476,6 +497,12 @@ function main()
                     if custom_cfg["protocol"] != null and len(custom_cfg["protocol"]) > 0
                         forward_protocol_str = custom_cfg["protocol"]
                     end
+                    if custom_cfg["log_level"] != null and len(custom_cfg["log_level"]) > 0
+                        log_level_str = custom_cfg["log_level"]
+                    end
+                    if custom_cfg["health_port"] != null and custom_cfg["health_port"] >= 0
+                        health_port = custom_cfg["health_port"]
+                    end
                     crypto_threads = custom_cfg["crypto_threads"]
                     io_threads = custom_cfg["io_threads"]
                     backlog = custom_cfg["backlog"]
@@ -517,6 +544,12 @@ function main()
                 i += 2
             else if (args_list[i] == "--protocol" or args_list[i] == "--proto") and i + 1 < len(args_list)
                 forward_protocol_str = args_list[i + 1]
+                i += 2
+            else if args_list[i] == "--log-level" and i + 1 < len(args_list)
+                log_level_str = args_list[i + 1]
+                i += 2
+            else if args_list[i] == "--health-port" and i + 1 < len(args_list)
+                health_port = proto::parse_number(args_list[i + 1])
                 i += 2
             else if args_list[i] == "--pass" and i + 1 < len(args_list)
                 pass = args_list[i + 1]
@@ -583,12 +616,29 @@ function main()
             end
         end
 
+        # log_level preset ("debug" verbose .. "error" quiet) overrides toggles
+        if log_level_str != ""
+            let log_lvl = vlog::parse_log_level(log_level_str) as int
+            if log_lvl <= 0
+                log_connections = 1
+                log_client_events = 1
+            else if log_lvl == 2
+                log_connections = 0
+                show_stats = 0
+            else if log_lvl >= 3
+                log_connections = 0
+                log_client_events = 0
+                show_stats = 0
+            end
+        end
+
         print_banner()
         let server_cfg = {
             "bind_address": bind_address,
             "port": port,
             "passphrase": pass,
             "forward_protocol": proto::parse_forward_protocol(forward_protocol_str) as int,
+            "health_port": health_port,
             "crypto_threads": crypto_threads,
             "io_threads": io_threads,
             "backlog": backlog,
@@ -617,6 +667,7 @@ function main()
         let pass = "change_me_to_a_secure_shared_passphrase_2026"
         let split_mode = router::mode_exclude() # Default blacklist
         let forward_protocol_str = "both"
+        let log_level_str = ""
         let app_list = ["Speedtest", "Discord", "Chrome", "curl"]
         let domain_list = []
         let auto_sys_proxy = 0
@@ -657,6 +708,9 @@ function main()
             pass = file_cfg["passphrase"]
             if file_cfg["protocol"] != null and len(file_cfg["protocol"]) > 0
                 forward_protocol_str = file_cfg["protocol"]
+            end
+            if file_cfg["log_level"] != null and len(file_cfg["log_level"]) > 0
+                log_level_str = file_cfg["log_level"]
             end
             crypto_threads = file_cfg["crypto_threads"]
             io_threads = file_cfg["io_threads"]
@@ -748,6 +802,9 @@ function main()
                     if custom_cfg["protocol"] != null and len(custom_cfg["protocol"]) > 0
                         forward_protocol_str = custom_cfg["protocol"]
                     end
+                    if custom_cfg["log_level"] != null and len(custom_cfg["log_level"]) > 0
+                        log_level_str = custom_cfg["log_level"]
+                    end
                     crypto_threads = custom_cfg["crypto_threads"]
                     io_threads = custom_cfg["io_threads"]
                     split_mode = router::parse_split_mode(custom_cfg["mode"], split_mode)
@@ -837,6 +894,9 @@ function main()
                 i += 2
             else if (args_list[i] == "--protocol" or args_list[i] == "--proto") and i + 1 < len(args_list)
                 forward_protocol_str = args_list[i + 1]
+                i += 2
+            else if args_list[i] == "--log-level" and i + 1 < len(args_list)
+                log_level_str = args_list[i + 1]
                 i += 2
             else if args_list[i] == "--pass" and i + 1 < len(args_list)
                 pass = args_list[i + 1]
@@ -976,6 +1036,21 @@ function main()
         end
 
         print_banner()
+        # log_level preset ("debug" verbose .. "error" quiet) overrides toggles
+        if log_level_str != ""
+            let log_lvl = vlog::parse_log_level(log_level_str) as int
+            if log_lvl <= 0
+                log_tunnel_traffic = 1
+                log_direct_traffic = 1
+            else if log_lvl == 2
+                log_direct_traffic = 0
+                show_stats = 0
+            else if log_lvl >= 3
+                log_tunnel_traffic = 0
+                log_direct_traffic = 0
+                show_stats = 0
+            end
+        end
         let tp_init = tpool::thread_pool_init(crypto_threads, io_threads)
         if tp_init != 0
             say("[ERROR] Failed to initialize thread pool")

@@ -86,6 +86,18 @@ jobs:
         run: |
           alya run tests/test_reconnect.alya
 
+      - name: Run health endpoint test suite
+        run: |
+          alya run tests/test_health.alya
+
+      - name: Run log level test suite
+        run: |
+          alya run tests/test_logging.alya
+
+      - name: Run hardening test suite
+        run: |
+          alya run tests/test_hardening.alya
+
       - name: Run benchmark
         run: |
           alya run src/main.alya -- benchmark

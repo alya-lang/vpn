@@ -115,6 +115,11 @@ show_stats = true
 stats_interval_sec = 10
 
 [logging]
+# Single verbosity preset overriding the toggles below (unset = keep them):
+#   "debug" - everything chatty; "info" - as configured;
+#   "warn"  - drop bypass chatter + stats, keep tunneled lines;
+#   "error" - errors only.
+# log_level = "info"
 # One line per tunneled connection: [TUNNEL] [AppName] -> host:port.
 log_tunnel_traffic = true
 # One line per DIRECT (bypassed) connection: [DIRECT] [AppName] -> host:port.

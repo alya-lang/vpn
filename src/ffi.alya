@@ -73,6 +73,10 @@ extern "C"
     function alya_vpn_srv_udp_clear() -> void
     function alya_vpn_srv_udp_close_all() -> void
 
+    # Server health endpoint (loopback-only JSON over HTTP)
+    function alya_vpn_note_server_start() -> void
+    function alya_vpn_health_poll(health_sock: i32) -> i64
+
     # Server SSRF Protection & Port Restriction
     function alya_vpn_set_server_block_lan(enable: i32) -> void
     function alya_vpn_get_server_block_lan() -> i32

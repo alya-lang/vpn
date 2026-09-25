@@ -76,6 +76,7 @@ function vpn_run_server(cfg, client_thread_handler)
     let bind_address = cfg["bind_address"]
     let block_lan = cfg["block_lan_destinations"]
     let forward_protocol = cfg["forward_protocol"] ?? 3
+    let health_port = cfg["health_port"] ?? 0
     let blocked_ports = cfg["blocked_ports"]
     let idle_timeout_sec = cfg["idle_timeout_sec"]
     let show_stats = cfg["show_stats"]
@@ -127,6 +128,18 @@ function vpn_run_server(cfg, client_thread_handler)
         tpool::thread_pool_shutdown()
         return 1
     end
+
+    # Optional loopback-only health endpoint (0 = disabled).
+    let health_sock = -1
+    if health_port > 0
+        health_sock = alya_vpn_tcp_listen("127.0.0.1", health_port, 16)
+        if health_sock >= 0
+            say("[INFO] Health endpoint:  http://127.0.0.1:" + health_port + "/healthz (loopback only)")
+        else
+            say("[WARN] Health endpoint unavailable on port " + health_port)
+        end
+    end
+    alya_vpn_note_server_start()
 
     # Assign listen socket to I/O worker 0
     tpool::thread_pool_assign_channel_worker(-1, 0)
@@ -193,6 +206,11 @@ function vpn_run_server(cfg, client_thread_handler)
                 last_stats_ms = now_ms
             end
         end
+
+        # Loopback health endpoint (no-op when disabled).
+        if health_sock >= 0
+            alya_vpn_health_poll(health_sock)
+        end
     end
 
     if server_sock >= 0
@@ -200,6 +218,9 @@ function vpn_run_server(cfg, client_thread_handler)
     end
     if server_sock6 >= 0
         net::tcp_close(server_sock6)
+    end
+    if health_sock >= 0
+        net::tcp_close(health_sock)
     end
     tpool::thread_pool_shutdown()
     return 0

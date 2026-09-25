@@ -1,0 +1,73 @@
+# Unit tests for the loopback health endpoint (no server needed).
+# Binds a real loopback listen socket, performs HTTP exchanges through it.
+import "std/test"
+import "std/net" as net
+import "../src/ffi.alya"
+
+function main()
+    test_suite("Health Endpoint Suite")
+    let r = runner_new()
+
+    alya_vpn_note_server_start()
+    let hsock = alya_vpn_tcp_listen("127.0.0.1", 0, 8)
+    runner_assert_eq(r, hsock >= 0, true, "Health listen socket binds loopback")
+    let hport = alya_vpn_tcp_bound_port(hsock)
+    runner_assert_eq(r, hport > 0, true, "Health port is readable")
+
+    # Idle poll is a safe no-op
+    runner_assert_eq(r, alya_vpn_health_poll(hsock) >= 0, true, "Idle health poll does not fail")
+    runner_assert_eq(r, alya_vpn_health_poll(-1), 0, "Health poll on invalid socket is idle")
+
+    # Full exchange: client sends, poll serves, client reads
+    let csock = net::tcp_connect("127.0.0.1", hport)
+    runner_assert_eq(r, csock >= 0, true, "Health client connects")
+    net::tcp_send(csock, "GET /healthz HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    let served = 0
+    let tries = 0
+    while tries < 500
+        if served == 1
+            break
+        end
+        if alya_vpn_health_poll(hsock) == 1
+            served = 1
+        end
+        alya_vpn_sleep_ms(2)
+        tries += 1
+    end
+    runner_assert_eq(r, served, 1, "Health probe was served")
+    let resp = alya_vpn_sock_recv_hex(csock, 1024)
+    runner_assert_eq(r, len(resp) > 0, true, "Health response received")
+    runner_assert_eq(r, resp.substring(0, 8) == "48545450", true, "Health response starts with HTTP")
+    runner_assert_eq(r, resp.substring(18, 6) == "323030", true, "Health status is 200")
+    net::tcp_close(csock)
+
+    # Unknown path answers 404
+    let csock2 = net::tcp_connect("127.0.0.1", hport)
+    runner_assert_eq(r, csock2 >= 0, true, "Second health client connects")
+    net::tcp_send(csock2, "GET /nope HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    let served2 = 0
+    let tries2 = 0
+    while tries2 < 500
+        if served2 == 1
+            break
+        end
+        if alya_vpn_health_poll(hsock) == 1
+            served2 = 1
+        end
+        alya_vpn_sleep_ms(2)
+        tries2 += 1
+    end
+    runner_assert_eq(r, served2, 1, "Unknown-path probe was served")
+    let resp2 = alya_vpn_sock_recv_hex(csock2, 1024)
+    runner_assert_eq(r, resp2.substring(0, 8) == "48545450", true, "Unknown-path response starts with HTTP")
+    runner_assert_eq(r, resp2.substring(18, 6) == "343034", true, "Unknown path status is 404")
+    net::tcp_close(csock2)
+    net::tcp_close(hsock)
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

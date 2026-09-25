@@ -256,8 +256,89 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
 // The TCP table entry for the accepted connection will have:
 //   dwLocalPort == proxy_local_port (in network order)
 //   dwRemotePort == peer_remote_port (in network order)
+// Fallback for peers the runtime cannot report (IPv6 peer ports surface as
+// -1): attribute only when EXACTLY ONE local socket talks to the proxy.
+// Anything ambiguous stays unknown — routing depends on it, never guess.
+static int win_single_peer_by_remote(int proxy_local_port, char *out_name, int max_len) {
+    HMODULE hIpHlp;
+    pfnGetExtendedTcpTable pGetTable;
+    uint16_t target_remote;
+    DWORD seen_pid;
+    int distinct;
+    DWORD size;
+    ALYA_MIB_TCPTABLE_OWNER_PID *table;
+    DWORD size6;
+    ALYA_MIB_TCP6TABLE_OWNER_PID *table6;
+    DWORD i;
+
+    if (!out_name || max_len <= 0) return 0;
+    hIpHlp = LoadLibraryA("iphlpapi.dll");
+    if (!hIpHlp) return 0;
+    pGetTable = (pfnGetExtendedTcpTable)GetProcAddress(hIpHlp, "GetExtendedTcpTable");
+    if (!pGetTable) {
+        FreeLibrary(hIpHlp);
+        return 0;
+    }
+    target_remote = htons((uint16_t)proxy_local_port);
+    seen_pid = 0;
+    distinct = 0;
+
+    size = 0;
+    pGetTable(NULL, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0);
+    if (size > 0) {
+        table = (ALYA_MIB_TCPTABLE_OWNER_PID *)malloc(size);
+        if (table) {
+            if (pGetTable(table, &size, FALSE, AF_INET, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
+                for (i = 0; i < table->dwNumEntries && distinct < 2; ++i) {
+                    if (table->table[i].dwRemotePort == target_remote) {
+                        if (seen_pid == 0) {
+                            seen_pid = table->table[i].dwOwningPid;
+                            distinct = 1;
+                        } else if (table->table[i].dwOwningPid != seen_pid) {
+                            distinct = 2;
+                        }
+                    }
+                }
+            }
+            free(table);
+        }
+    }
+    if (distinct < 2) {
+        size6 = 0;
+        pGetTable(NULL, &size6, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0);
+        if (size6 > 0) {
+            table6 = (ALYA_MIB_TCP6TABLE_OWNER_PID *)malloc(size6);
+            if (table6) {
+                if (pGetTable(table6, &size6, FALSE, AF_INET6, TCP_TABLE_OWNER_PID_ALL, 0) == NO_ERROR) {
+                    for (i = 0; i < table6->dwNumEntries && distinct < 2; ++i) {
+                        if (table6->table[i].dwRemotePort == target_remote) {
+                            if (seen_pid == 0) {
+                                seen_pid = table6->table[i].dwOwningPid;
+                                distinct = 1;
+                            } else if (table6->table[i].dwOwningPid != seen_pid) {
+                                distinct = 2;
+                            }
+                        }
+                    }
+                }
+                free(table6);
+            }
+        }
+    }
+
+    FreeLibrary(hIpHlp);
+    if (distinct == 1 && seen_pid != 0) {
+        return get_process_name_by_pid(seen_pid, out_name, max_len);
+    }
+    return 0;
+}
+
 int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port, char *out_name, int max_len) {
     if (!out_name || max_len <= 0) return 0;
+
+    if (peer_remote_port <= 0) {
+        return win_single_peer_by_remote(proxy_local_port, out_name, max_len);
+    }
 
     HMODULE hIpHlp = LoadLibraryA("iphlpapi.dll");
     if (!hIpHlp) return 0;
@@ -480,8 +561,109 @@ int alya_vpn_get_process_by_port(int local_port, char *out_name, int max_len) {
 // Linux equivalent for peer port matching: reads /proc/net/tcp and /proc/net/tcp6
 // and matches both local port AND remote port to find the correct inode.
 // The inode is then matched against /proc/<pid>/fd/ socket symlinks.
+// Fallback for unreportable peers (peer<=0, e.g. IPv6): attribute only when
+// EXACTLY ONE socket talks to the proxy; ambiguous stays unknown.
+static int linux_single_peer_by_remote(int proxy_local_port, char *out_name, int max_len) {
+    int inodes[65];
+    int n_inodes;
+    const char *files[2];
+    int fi;
+    DIR *dir;
+    struct dirent *entry;
+    char target_socket[64];
+    int i;
+    int seen_pid;
+    int distinct;
+
+    if (!out_name || max_len <= 0) return 0;
+    out_name[0] = '\0';
+    n_inodes = 0;
+    files[0] = "/proc/net/tcp";
+    files[1] = "/proc/net/tcp6";
+    for (fi = 0; fi < 2 && n_inodes < 65; ++fi) {
+        FILE *f = fopen(files[fi], "r");
+        char line[512];
+        if (!f) continue;
+        if (!fgets(line, sizeof(line), f)) {
+            fclose(f);
+            continue;
+        }
+        while (fgets(line, sizeof(line), f) && n_inodes < 65) {
+            int sl;
+            unsigned int local_ip, local_p, remote_ip, remote_p;
+            int inode;
+            if (sscanf(line, "%d: %x:%x %x:%x %*x %*x:%*x %*x:%*x %*x %*d %*d %d",
+                       &sl, &local_ip, &local_p, &remote_ip, &remote_p, &inode) >= 5) {
+                if ((int)remote_p == proxy_local_port) {
+                    inodes[n_inodes++] = inode;
+                }
+            }
+        }
+        fclose(f);
+    }
+    if (n_inodes <= 0 || n_inodes > 64) return 0; // none or ambiguous
+
+    dir = opendir("/proc");
+    if (!dir) return 0;
+    seen_pid = -1;
+    distinct = 0;
+    while ((entry = readdir(dir)) != NULL && distinct < 2) {
+        int pid_int;
+        char fd_dir_path[256];
+        DIR *fd_dir;
+        struct dirent *fd_entry;
+        if (entry->d_name[0] < '0' || entry->d_name[0] > '9') continue;
+        pid_int = atoi(entry->d_name);
+        snprintf(fd_dir_path, sizeof(fd_dir_path), "/proc/%s/fd", entry->d_name);
+        fd_dir = opendir(fd_dir_path);
+        if (!fd_dir) continue;
+        while ((fd_entry = readdir(fd_dir)) != NULL) {
+            char link_path[512];
+            char link_target[256];
+            ssize_t link_len;
+            snprintf(link_path, sizeof(link_path), "%s/%s", fd_dir_path, fd_entry->d_name);
+            link_len = readlink(link_path, link_target, sizeof(link_target) - 1);
+            if (link_len <= 0) continue;
+            link_target[link_len] = '\0';
+            for (i = 0; i < n_inodes; ++i) {
+                snprintf(target_socket, sizeof(target_socket), "socket:[%d]", inodes[i]);
+                if (strcmp(link_target, target_socket) == 0) {
+                    if (seen_pid < 0) {
+                        seen_pid = pid_int;
+                        distinct = 1;
+                    } else if (pid_int != seen_pid) {
+                        distinct = 2;
+                    }
+                    break;
+                }
+            }
+            if (distinct >= 2) break;
+        }
+        closedir(fd_dir);
+    }
+    closedir(dir);
+    if (distinct == 1 && seen_pid >= 0) {
+        char comm_path[256];
+        snprintf(comm_path, sizeof(comm_path), "/proc/%d/comm", seen_pid);
+        FILE *comm_f = fopen(comm_path, "r");
+        if (comm_f) {
+            if (fgets(out_name, max_len, comm_f)) {
+                char *nl = strchr(out_name, '\n');
+                if (nl) *nl = '\0';
+                return 1;
+            }
+            fclose(comm_f);
+        }
+    }
+    return 0;
+}
+
 int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port, char *out_name, int max_len) {
     if (!out_name || max_len <= 0) return 0;
+
+    if (peer_remote_port <= 0) {
+        return linux_single_peer_by_remote(proxy_local_port, out_name, max_len);
+    }
 
     // Scan /proc/net/tcp (IPv4)
     FILE *f = fopen("/proc/net/tcp", "r");
@@ -623,9 +805,94 @@ static int macos_get_proc_name_or_bundle(pid_t pid, char *out_name, int max_len)
     return 0;
 }
 
+// Same exact-single fallback over libproc sockets: any TCP socket whose
+// foreign port is the proxy counts; attributed only when a single pid owns
+// them all, else unknown (routing depends on it, never guess).
+static int mac_single_peer_by_remote(int proxy_local_port, char *out_name, int max_len) {
+    int num_pids;
+    pid_t *pids;
+    pid_t seen_pid;
+    int distinct;
+    int i;
+
+    if (!out_name || max_len <= 0) return 0;
+    out_name[0] = '\0';
+    num_pids = proc_listallpids(NULL, 0);
+    if (num_pids <= 0) return 0;
+    pids = (pid_t *)malloc(sizeof(pid_t) * (size_t)num_pids * 2);
+    if (!pids) return 0;
+    num_pids = proc_listallpids(pids, (int)(sizeof(pid_t) * (size_t)num_pids * 2));
+    if (num_pids <= 0) {
+        free(pids);
+        return 0;
+    }
+    seen_pid = -1;
+    distinct = 0;
+    for (i = 0; i < num_pids && distinct < 2; ++i) {
+        pid_t pid = pids[i];
+        int buf_size;
+        struct proc_fdinfo stack_fds[128];
+        struct proc_fdinfo *fds;
+        int count;
+        int num_fds;
+        int j;
+        if (pid <= 0 || pid == getpid()) continue;
+        buf_size = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, NULL, 0);
+        if (buf_size <= 0) continue;
+        fds = stack_fds;
+        count = buf_size / (int)sizeof(struct proc_fdinfo);
+        if (count > 128) {
+            fds = (struct proc_fdinfo *)malloc((size_t)buf_size);
+            if (!fds) continue;
+        }
+        num_fds = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, fds, buf_size);
+        if (num_fds <= 0) {
+            if (fds != stack_fds) free(fds);
+            continue;
+        }
+        count = num_fds / (int)sizeof(struct proc_fdinfo);
+        for (j = 0; j < count; ++j) {
+            if (fds[j].proc_fdtype == PROX_FDTYPE_SOCKET) {
+                struct socket_fdinfo si;
+                memset(&si, 0, sizeof(si));
+                int s = proc_pidfdinfo(pid, fds[j].proc_fd, PROC_PIDFDSOCKETINFO, &si, sizeof(si));
+                if (s > (int)sizeof(struct proc_fileinfo)) {
+                    int kind = si.psi.soi_kind;
+                    if (kind == SOCKINFO_TCP || kind == SOCKINFO_IN || kind == 0) {
+                        int raw_fport = (int)(uint16_t)si.psi.soi_proto.pri_tcp.tcpsi_ini.insi_fport;
+                        int swap_fport = (int)ntohs((uint16_t)raw_fport);
+                        if (raw_fport == proxy_local_port || swap_fport == proxy_local_port) {
+                            if (seen_pid < 0) {
+                                seen_pid = pid;
+                                distinct = 1;
+                            } else if (pid != seen_pid) {
+                                distinct = 2;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (fds != stack_fds) free(fds);
+    }
+    free(pids);
+    if (distinct == 1 && seen_pid > 0) {
+        if (!macos_get_proc_name_or_bundle(seen_pid, out_name, max_len)) {
+            snprintf(out_name, (size_t)max_len, "pid-%d", (int)seen_pid);
+        }
+        return 1;
+    }
+    return 0;
+}
+
 int alya_vpn_get_process_by_peer_port(int proxy_local_port, int peer_remote_port, char *out_name, int max_len) {
     if (!out_name || max_len <= 0) return 0;
     out_name[0] = '\0';
+
+    if (peer_remote_port <= 0) {
+        return mac_single_peer_by_remote(proxy_local_port, out_name, max_len);
+    }
 
     int num_pids = proc_listallpids(NULL, 0);
     if (num_pids <= 0) return 0;
@@ -1748,6 +2015,9 @@ static int is_lan_target(const char *host) {
 
 static int pattern_match_c(const char *pattern, const char *text) {
     if (!pattern || !text || !pattern[0] || !text[0]) return 0;
+
+    // Lone "*" is the documented match-all.
+    if (pattern[0] == '*' && pattern[1] == '\0') return 1;
 
     // Case-insensitive exact match
     if (ALYA_STRICMP(pattern, text) == 0) return 1;
@@ -4101,6 +4371,86 @@ int64_t alya_vpn_pump_server_vpn(int client_sock) {
     }
 
     return activity;
+}
+
+// ============================================================================
+// Server Health Endpoint (loopback-only JSON over HTTP)
+// ============================================================================
+// Serves the optional monitoring socket the Alya layer opens when
+// health_port > 0. Always bound to 127.0.0.1 by the caller: never exposed.
+
+#define ALYA_VPN_VERSION_STR "0.2.12"
+
+static uint32_t s_srv_start_ms = 0;
+static int s_srv_started = 0;
+
+void alya_vpn_note_server_start(void) {
+    s_srv_start_ms = get_time_ms();
+    s_srv_started = 1;
+}
+
+// Single-shot probe: accepts one HTTP connection, answers, closes.
+// Returns 1 when a probe was served, 0 when idle, -1 on fatal error.
+int64_t alya_vpn_health_poll(int health_sock) {
+    char req[4096];
+    uint8_t resp[512];
+    char body[256];
+    int cs;
+    int total;
+    uint32_t start;
+    int ok;
+    uint32_t uptime;
+    int blen;
+    int hlen;
+
+    if (health_sock < 0) return 0;
+    cs = (int)accept((SOCKET)health_sock, NULL, NULL);
+    if (cs < 0) {
+        return is_would_block() ? 0 : -1;
+    }
+    set_sock_nonblocking(cs);
+
+    // Read until end of HTTP headers, 4KB cap, 750ms slowloris cap.
+    total = 0;
+    start = get_time_ms();
+    while (total < (int)sizeof(req) - 1) {
+        int n = recv((SOCKET)cs, req + total, (int)sizeof(req) - 1 - total, 0);
+        if (n > 0) {
+            total += n;
+            req[total] = '\0';
+            if (strstr(req, "\r\n\r\n") != NULL) break;
+            continue;
+        }
+        if (n == 0) break; // port-scan close
+        if (!is_would_block()) break; // hard error
+        if (get_time_ms() - start > 750) break;
+        alya_vpn_sleep_ms(1);
+    }
+    req[total] = '\0';
+
+    ok = 0;
+    if (total > 4 && strncmp(req, "GET ", 4) == 0) {
+        if (total >= 12 && strncmp(req + 4, "/healthz", 8) == 0) ok = 1;
+        else if (total >= 11 && strncmp(req + 4, "/readyz", 7) == 0) ok = 1;
+    }
+    uptime = s_srv_started ? (get_time_ms() - s_srv_start_ms) / 1000 : 0;
+    if (ok) {
+        blen = snprintf(body, sizeof(body),
+            "{\"status\":\"ok\",\"version\":\"%s\",\"active_clients\":%d,\"max_clients\":%d,\"forward_protocol\":%d,\"uptime_sec\":%u}",
+            ALYA_VPN_VERSION_STR, alya_vpn_srv_get_active_clients(), alya_vpn_srv_get_max_clients(),
+            alya_vpn_get_forward_protocol(), (unsigned int)uptime);
+    } else {
+        blen = snprintf(body, sizeof(body), "{\"status\":\"not-found\"}");
+    }
+    if (blen < 0) blen = 0;
+    if (blen > (int)sizeof(body) - 1) blen = (int)sizeof(body) - 1;
+    hlen = snprintf((char *)resp, sizeof(resp),
+        "HTTP/1.1 %s\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+        ok ? "200 OK" : "404 Not Found", blen);
+    if (hlen > 0) send_all(cs, resp, hlen);
+    if (blen > 0) send_all(cs, (const uint8_t *)body, blen);
+    close_sock(cs);
+    return 1;
 }
 
 // ============================================================================

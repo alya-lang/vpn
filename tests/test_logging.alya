@@ -1,0 +1,28 @@
+# Unit tests for log verbosity presets.
+import "std/test"
+import "../src/common/logging.alya" as vlog
+
+function main()
+    test_suite("Log Level Suite")
+    let r = runner_new()
+
+    runner_assert_eq(r, vlog::LogLevel.Debug as int, 0, "Debug discriminant is 0")
+    runner_assert_eq(r, vlog::LogLevel.Info as int, 1, "Info discriminant is 1")
+    runner_assert_eq(r, vlog::LogLevel.Warn as int, 2, "Warn discriminant is 2")
+    runner_assert_eq(r, vlog::LogLevel.Error as int, 3, "Error discriminant is 3")
+
+    runner_assert_eq(r, vlog::parse_log_level("debug") as int, 0, "debug parses to Debug")
+    runner_assert_eq(r, vlog::parse_log_level("INFO") as int, 1, "INFO parses to Info")
+    runner_assert_eq(r, vlog::parse_log_level("warn") as int, 2, "warn parses to Warn")
+    runner_assert_eq(r, vlog::parse_log_level("warning") as int, 2, "warning parses to Warn")
+    runner_assert_eq(r, vlog::parse_log_level("error") as int, 3, "error parses to Error")
+    runner_assert_eq(r, vlog::parse_log_level("bogus") as int, 1, "Unknown keeps Info")
+    runner_assert_eq(r, vlog::parse_log_level("") as int, 1, "Empty keeps Info")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

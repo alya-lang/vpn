@@ -57,6 +57,13 @@ WORKDIR /app
 COPY --from=builder /build/alya-vpn-server /app/alya-vpn-server
 COPY --from=builder /build/config/server.toml /app/config/server.toml
 
+# Drop privileges: the tunnel port is unprivileged (>1024), no root needed.
+# NOTE: a host-mounted /app/config must stay readable by uid 999 (e.g.
+# `chown 999 config/server.toml` on the host) or the daemon fails to start.
+RUN useradd -r -u 999 -s /usr/sbin/nologin alya \
+    && chown -R alya:alya /app
+USER alya
+
 # Expose default VPN tunnel port (51822)
 EXPOSE 51822
 

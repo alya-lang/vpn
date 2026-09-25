@@ -1,0 +1,21 @@
+# Alya VPN - Log verbosity presets
+# A single "log_level" knob maps onto the individual per-category toggles
+# in main.alya (debug = everything chatty, error = errors only).
+
+enum LogLevel
+    Debug = 0
+    Info = 1
+    Warn = 2
+    Error = 3
+end
+
+# Parses a log_level value (case-insensitive). Unknown values keep Info.
+function parse_log_level(s) -> LogLevel
+    return when lower(s)
+        is "debug" => LogLevel.Debug
+        is "info" => LogLevel.Info
+        is "warn", "warning" => LogLevel.Warn
+        is "error" => LogLevel.Error
+        else => LogLevel.Info
+    end
+end

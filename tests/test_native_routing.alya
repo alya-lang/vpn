@@ -3,6 +3,7 @@
 # loopback/LAN bypass, DNS routing and the include/exclude/all modes.
 # Global engine state is reset to neutral before and after the suite.
 import "std/test"
+import "../src/common/crypto.alya" as crypto
 import "../src/ffi.alya"
 
 function routing_reset_neutral()
@@ -88,6 +89,12 @@ function main()
     runner_assert_eq(r, alya_vpn_should_route_host("2001:db8::1", 443), -1, "Global IPv6 defers to process decision")
     runner_assert_eq(r, alya_vpn_should_route_host("::ffff:127.0.0.1", 443), 0, "v4-mapped loopback bypasses VPN")
     runner_assert_eq(r, alya_vpn_should_route_host("fec0::1", 443), 0, "Deprecated site-local bypasses VPN")
+
+    # 9. Unreportable-peer fallback (e.g. IPv6 peers invisible to port
+    # lookup): a port with no listener can have no candidates -> unknown.
+    alya_vpn_set_routing(1, "")
+    let pbuf = "" + crypto::alloc_str(260)
+    runner_assert_eq(r, alya_vpn_check_peer_route(47821, -1, pbuf, 256), 0, "Unresolvable peer bypasses in include mode")
 
     routing_reset_neutral()
 

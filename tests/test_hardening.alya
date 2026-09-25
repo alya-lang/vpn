@@ -1,0 +1,51 @@
+# Hardening tests: malformed frames, invalid sockets and hostile patterns
+# must surface as clean rejections, never as crashes.
+import "std/test"
+import "../src/common/crypto.alya" as crypto
+import "../src/common/protocol.alya" as proto
+import "../src/ffi.alya"
+
+function main()
+    test_suite("Hardening Suite")
+    let r = runner_new()
+    let key = crypto::vpn_derive_key("hardening_probe_key_2026")
+
+    # Empty / truncated / wrong-magic frames
+    let t0, p0 = proto::unpack_frame(key, "")
+    runner_assert_eq(r, t0, 0, "Empty frame yields type 0")
+    runner_assert_eq(r, p0, null, "Empty frame yields null payload")
+    let t1, p1 = proto::unpack_frame(key, "AV")
+    runner_assert_eq(r, t1, 0, "Truncated magic yields type 0")
+    runner_assert_eq(r, p1, null, "Truncated magic yields null payload")
+    let t2, p2 = proto::unpack_frame(key, "XX01" + "00" + "ff")
+    runner_assert_eq(r, t2, 0, "Wrong magic yields type 0")
+    runner_assert_eq(r, p2, null, "Wrong magic yields null payload")
+
+    # Wrong envelope version is rejected even with valid body length
+    let good = proto::pack_frame(key, proto::msg_data(), "hello")
+    let badver = good.substring(0, 2) + "02" + good.substring(4, len(good) - 4)
+    let t3, p3 = proto::unpack_frame(key, badver)
+    runner_assert_eq(r, t3, 0, "Wrong version yields type 0")
+    runner_assert_eq(r, p3, null, "Wrong version yields null payload")
+
+    # Invalid sockets never crash native pumps and channels
+    runner_assert_eq(r, alya_vpn_pump_client_vpn(-1), -1, "Client pump on invalid socket returns -1")
+    runner_assert_eq(r, alya_vpn_open_client_channel(-1, 7, "example.com", 80, -1), -1, "Channel open on invalid sockets returns -1")
+    let hbuf = "" + crypto::alloc_str(260)
+    runner_assert_eq(r, alya_vpn_socks5_handshake(-1, hbuf, 256), -1, "Handshake on invalid socket returns -1")
+
+    # Hostile routing patterns stay bounded
+    alya_vpn_set_routing(1, "")
+    alya_vpn_add_routing_app("")
+    runner_assert_eq(r, alya_vpn_should_route("chrome"), 0, "Empty rule is ignored")
+    alya_vpn_add_routing_app("*")
+    runner_assert_eq(r, alya_vpn_should_route("anything-at-all"), 1, "Bare star matches")
+    alya_vpn_set_routing(0, "")
+
+    let failed = runner_summary(r)
+    if failed > 0
+        exit(1)
+    end
+end
+
+main()

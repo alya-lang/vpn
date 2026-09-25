@@ -117,6 +117,10 @@ void alya_vpn_udp_resync(void);
 void alya_vpn_srv_udp_clear(void);
 void alya_vpn_srv_udp_close_all(void);
 
+// Server health endpoint (loopback-only JSON over HTTP).
+void alya_vpn_note_server_start(void);
+int64_t alya_vpn_health_poll(int health_sock);
+
 // Server SSRF Protection (Block LAN / Loopback destinations)
 void alya_vpn_set_server_block_lan(int enable);
 int  alya_vpn_get_server_block_lan(void);

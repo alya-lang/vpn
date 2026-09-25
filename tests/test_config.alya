@@ -150,6 +150,8 @@ function main()
     runner_assert_eq(r, is_bool_str(toml_get(client, "auto_sys_proxy")), true, "auto_sys_proxy must be a boolean")
     runner_assert_eq(r, toml_get(client, "udp_relay_port") != null, true, "udp_relay_port must be set")
     runner_assert_eq(r, proto::parse_number(toml_get(client, "udp_relay_port")) >= 0, true, "udp_relay_port must be non-negative")
+    let cloglvl = toml_get(client, "log_level")
+    runner_assert_eq(r, cloglvl == null or cloglvl == "debug" or cloglvl == "info" or cloglvl == "warn" or cloglvl == "warning" or cloglvl == "error", true, "Client log_level must be valid when set")
 
     # Server: endpoints, protocol, capacity
     let sport = proto::parse_number(toml_get(server, "port"))
@@ -162,6 +164,10 @@ function main()
     runner_assert_eq(r, is_bool_str(toml_get(server, "block_lan_destinations")), true, "block_lan_destinations must be a boolean")
     runner_assert_eq(r, is_bool_str(toml_get(server, "log_connections")), true, "log_connections must be a boolean")
     runner_assert_eq(r, is_bool_str(toml_get(server, "log_client_events")), true, "log_client_events must be a boolean")
+    runner_assert_eq(r, toml_get(server, "health_port") != null, true, "health_port must be set")
+    runner_assert_eq(r, proto::parse_number(toml_get(server, "health_port")) >= 0, true, "health_port must be non-negative")
+    let slog = toml_get(server, "log_level")
+    runner_assert_eq(r, slog == null or slog == "debug" or slog == "info" or slog == "warn" or slog == "warning" or slog == "error", true, "Server log_level must be valid when set")
 
     # macOS lean config: comment-free by design (ARM64 runtime chokes on the
     # documented file), same values as client.toml
