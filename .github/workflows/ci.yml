@@ -108,7 +108,9 @@ jobs:
           kill $CLIENT_PID 2>/dev/null || true
           sleep 2
           kill -9 $CLIENT_PID 2>/dev/null || true
-          wait $CLIENT_PID 2>/dev/null; CODE=$?; echo "client exit code: $CODE"
+          CODE=0
+          wait $CLIENT_PID 2>/dev/null || CODE=$?
+          echo "client exit code: $CODE"
           echo "--- banner check ---"
           grep -c "Alya VPN Client Active" /tmp/vpnclient-probe.log || true
 
@@ -135,7 +137,9 @@ jobs:
           kill $CLIENT_PID 2>/dev/null || true
           sleep 2
           kill -9 $CLIENT_PID 2>/dev/null || true
-          wait $CLIENT_PID 2>/dev/null; CODE=$?; echo "built client exit code: $CODE"
+          CODE=0
+          wait $CLIENT_PID 2>/dev/null || CODE=$?
+          echo "built client exit code: $CODE"
           echo "--- banner check ---"
           grep -c "Alya VPN Client Active" /tmp/vpnbuilt-probe.log || true
 
