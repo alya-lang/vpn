@@ -16,3 +16,7 @@ keywords = ["alya", "vpn", "tunnel", "network", "split-tunneling", "proxy", "sec
 c-sources = ["c/crypto.c", "c/proc_resolver.c", "c/buffer_pool.c", "c/thread_pool.c"]
 c-flags = ["-O2", "-std=c11", "-Wall", "-Wextra"]
 c-include-dirs = ["c"]
+
+[profile.release]
+opt-level = 3
+debug = false
