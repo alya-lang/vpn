@@ -9,6 +9,7 @@ Alya VPN is a high-performance, secure, per-application split-tunneling VPN clie
 | Platform | Architecture | Package | Checksum |
 |:---|:---|:---|:---:|
 | <img src="https://svgl.app/library/linux.svg" width="16" height="16" valign="middle" alt="Linux" />&nbsp;**Linux** | `x86_64` | [alya-vpn-{{VERSION}}-x86_64-linux.tar.gz]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-x86_64-linux.tar.gz) | [`{{LINUX_SHA_SHORT}}`]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-x86_64-linux.tar.gz.sha256) |
+| <img src="https://svgl.app/library/linux.svg" width="16" height="16" valign="middle" alt="Linux" />&nbsp;**Linux** | `x86` (32-bit) | [alya-vpn-{{VERSION}}-x86-linux.tar.gz]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-x86-linux.tar.gz) | [`{{LINUX_X86_SHA_SHORT}}`]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-x86-linux.tar.gz.sha256) |
 | <img src="https://svgl.app/library/linux.svg" width="16" height="16" valign="middle" alt="Linux" />&nbsp;**Linux** | `arm64` | [alya-vpn-{{VERSION}}-arm64-linux.tar.gz]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-arm64-linux.tar.gz) | [`{{LINUX_ARM_SHA_SHORT}}`]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-arm64-linux.tar.gz.sha256) |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="https://svgl.app/library/apple_dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://svgl.app/library/apple.svg"><img src="https://svgl.app/library/apple.svg" width="16" height="16" valign="middle" alt="macOS" /></picture>&nbsp;**macOS** | `arm64` (Apple Silicon) | [alya-vpn-{{VERSION}}-arm64-macos.tar.gz]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-arm64-macos.tar.gz) | [`{{MAC_ARM_SHA_SHORT}}`]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-arm64-macos.tar.gz.sha256) |
 | <picture><source media="(prefers-color-scheme: dark)" srcset="https://svgl.app/library/apple_dark.svg"><source media="(prefers-color-scheme: light)" srcset="https://svgl.app/library/apple.svg"><img src="https://svgl.app/library/apple.svg" width="16" height="16" valign="middle" alt="macOS" /></picture>&nbsp;**macOS** | `x86_64` (Intel) | [alya-vpn-{{VERSION}}-x86_64-macos.tar.gz]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-x86_64-macos.tar.gz) | [`{{MAC_X64_SHA_SHORT}}`]({{REPO_URL}}/releases/download/{{VERSION}}/alya-vpn-{{VERSION}}-x86_64-macos.tar.gz.sha256) |
@@ -19,6 +20,7 @@ Alya VPN is a high-performance, secure, per-application split-tunneling VPN clie
 
 ```text
 {{LINUX_SHA}}  alya-vpn-{{VERSION}}-x86_64-linux.tar.gz
+{{LINUX_X86_SHA}}  alya-vpn-{{VERSION}}-x86-linux.tar.gz
 {{LINUX_ARM_SHA}}  alya-vpn-{{VERSION}}-arm64-linux.tar.gz
 {{MAC_ARM_SHA}}  alya-vpn-{{VERSION}}-arm64-macos.tar.gz
 {{MAC_X64_SHA}}  alya-vpn-{{VERSION}}-x86_64-macos.tar.gz

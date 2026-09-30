@@ -31,6 +31,10 @@ jobs:
             platform: x86_64-linux
             binary: alya-vpn
             archive: tar.gz
+          - runner: ubuntu-latest
+            platform: x86-linux
+            binary: alya-vpn
+            archive: tar.gz
           - runner: ubuntu-24.04-arm
             platform: arm64-linux
             binary: alya-vpn
@@ -57,10 +61,24 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Alya Compiler (Standard)
-        if: matrix.target.platform != 'x86_64-macos'
+        if: matrix.target.platform != 'x86_64-macos' && matrix.target.platform != 'x86-linux'
         uses: alya-lang/setup-alya@v1
         with:
           version: 'latest'
+
+      - name: Set up Alya Compiler (Linux x86)
+        if: matrix.target.platform == 'x86-linux'
+        run: |
+          TAG=$(python3 -c "import json,urllib.request; print(json.load(urllib.request.urlopen(urllib.request.Request('https://api.github.com/repos/alya-lang/alya/releases/latest', headers={'User-Agent':'alya-vpn-release'})))['tag_name'])")
+          curl -fsSL -o alya-x86.tar.gz "https://github.com/alya-lang/alya/releases/download/${TAG}/alya-${TAG}-x86-linux.tar.gz"
+          tar -xzf alya-x86.tar.gz
+          sudo cp alya-*/alya /usr/local/bin/alya
+          sudo chmod +x /usr/local/bin/alya
+          rm -rf alya-x86.tar.gz alya-*
+
+      - name: Install 32-bit C toolchain (x86-linux)
+        if: matrix.target.platform == 'x86-linux'
+        run: sudo apt-get update && sudo apt-get install -y gcc-multilib libc6-i386
 
       - name: Set up Alya Compiler (macOS x86_64 via Rosetta)
         if: matrix.target.platform == 'x86_64-macos'
