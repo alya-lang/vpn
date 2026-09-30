@@ -188,7 +188,7 @@ jobs:
       # CI-built artifact also bus-errors (separates "local build env" from
       # "codegen"). TODO(remove after diagnosis): delete this step.
       - name: TEMP DIAG upload built binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: alya-vpn-${{ matrix.label }}
           path: alya-vpn-ci*
