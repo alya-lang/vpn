@@ -51,6 +51,8 @@ jobs:
       - name: Set up Alya Compiler (Linux x86)
         if: matrix.label == 'Linux x86'
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           TAG=$(gh release list --repo alya-lang/alya --limit 1 --json tagName --jq '.[0].tagName')
           curl -fsSL -o alya-x86.tar.gz "https://github.com/alya-lang/alya/releases/download/${TAG}/alya-${TAG}-x86-linux.tar.gz"
