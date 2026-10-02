@@ -57,7 +57,6 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Alya Compiler (Standard)
-        if: matrix.target.platform != 'x86_64-macos'
         uses: alya-lang/setup-alya@v1
         with:
           version: 'latest'
