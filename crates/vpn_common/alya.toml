@@ -1,0 +1,13 @@
+[package]
+name = "vpn_common"
+version = "0.1.0"
+alya-version = "0.0.19"
+entry = "src/lib.alya"
+description = "Shared VPN primitives: crypto, protocol, logging, thread pool, native FFI"
+authors = ["Alya Language Contributors <https://github.com/alya-lang>"]
+license = "MIT"
+
+[build]
+c-sources = ["c/crypto.c", "c/proc_resolver.c", "c/buffer_pool.c", "c/thread_pool.c"]
+c-flags = ["-O2", "-std=c11", "-Wall", "-Wextra"]
+c-include-dirs = ["c"]

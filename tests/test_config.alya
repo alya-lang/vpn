@@ -3,7 +3,7 @@
 # Run from the package root so config/client.toml and config/server.toml
 # resolve (same working directory as `alya test`).
 import "std/test"
-import "../src/common/protocol.alya" as proto
+import "vpn_common/protocol.alya" as proto
 
 function trim_ws(s)
     let res = s

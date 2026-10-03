@@ -3,10 +3,10 @@
 
 import "std/net" as net
 import "std/thread" as thread
-import "../common/crypto.alya" as crypto
-import "../common/protocol.alya" as proto
-import "../common/thread_pool.alya" as tpool
-import "../ffi.alya"
+import "vpn_common/crypto.alya" as crypto
+import "vpn_common/protocol.alya" as proto
+import "vpn_common/thread_pool.alya" as tpool
+import "vpn_common/ffi"
 
 # Polls one listen socket and dispatches a single pending client connection.
 # Returns 1 when a connection was accepted, else 0.

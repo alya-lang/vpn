@@ -1,9 +1,9 @@
 # End-to-End Simulation Test for Alya VPN
 import "std/test"
-import "../src/common/crypto.alya" as crypto
-import "../src/common/protocol.alya" as proto
-import "../src/client/router.alya" as router
-import "../src/ffi.alya"
+import "vpn_common/crypto.alya" as crypto
+import "vpn_common/protocol.alya" as proto
+import "vpn_client/router.alya" as router
+import "vpn_common/ffi"
 
 function main()
     test_suite("Alya VPN End-to-End Flow Suite")

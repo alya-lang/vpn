@@ -1,6 +1,6 @@
 # Unit tests for Alya VPN Split Tunneling Rules
 import "std/test"
-import "../src/client/router.alya" as router
+import "vpn_client/router.alya" as router
 
 function main()
     test_suite("Alya VPN Split Tunneling Rules Suite")

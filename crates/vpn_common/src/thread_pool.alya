@@ -1,7 +1,7 @@
 # Alya VPN - Thread Pool Wrapper
 # High-level API for thread pool operations from Alya
 
-import "../ffi.alya"
+import "./ffi.alya"
 
 # Work types
 function WORK_CRYPTO_ENCRYPT() return 1 end

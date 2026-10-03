@@ -1,7 +1,7 @@
 # Alya VPN - Protocol Specification and Frame Serialization
 # Pure Alya implementation without external dependencies
 
-import "../ffi.alya"
+import "./ffi.alya"
 
 # Message Types
 function msg_handshake_req() return 1 end

@@ -1,6 +1,6 @@
 # Unit tests for log verbosity presets.
 import "std/test"
-import "../src/common/logging.alya" as vlog
+import "vpn_common/logging.alya" as vlog
 
 function main()
     test_suite("Log Level Suite")

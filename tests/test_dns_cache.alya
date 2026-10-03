@@ -3,7 +3,7 @@
 # the direct-open path, which resolves before connecting.
 import "std/test"
 import "std/net" as net
-import "../src/ffi.alya"
+import "vpn_common/ffi"
 
 function main()
     test_suite("DNS Cache Suite")

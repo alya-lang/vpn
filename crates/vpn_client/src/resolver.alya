@@ -1,8 +1,8 @@
 # Alya VPN - Process Resolver
 # Maps local client socket ports to process executable names using OS-level network tables
 
-import "../ffi.alya"
-import "../common/crypto.alya" as crypto
+import "vpn_common/ffi"
+import "vpn_common/crypto.alya" as crypto
 
 # Extracts null-terminated C string from buffer
 function extract_c_string(buf)

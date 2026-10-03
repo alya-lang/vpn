@@ -1,0 +1,6 @@
+# vpn_client library facade: pulls every module into the member entry so
+# `check`/`build` verify the whole closure.
+# alya-lint: disable unused-import
+import "./local_proxy.alya"
+import "./resolver.alya"
+import "./router.alya"

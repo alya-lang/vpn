@@ -1,6 +1,6 @@
 # Alya VPN Split-Tunneling Demo
-import "../src/common/crypto.alya" as crypto
-import "../src/client/router.alya" as router
+import "vpn_common/crypto.alya" as crypto
+import "vpn_client/router.alya" as router
 
 function main()
     say("==================================================")

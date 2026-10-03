@@ -3,8 +3,8 @@
 # loopback/LAN bypass, DNS routing and the include/exclude/all modes.
 # Global engine state is reset to neutral before and after the suite.
 import "std/test"
-import "../src/common/crypto.alya" as crypto
-import "../src/ffi.alya"
+import "vpn_common/crypto.alya" as crypto
+import "vpn_common/ffi"
 
 function routing_reset_neutral()
     alya_vpn_set_routing(0, "")

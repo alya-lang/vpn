@@ -10,12 +10,13 @@ homepage = "https://github.com/alya-lang/alya"
 repository = "https://github.com/alya-lang/vpn"
 keywords = ["alya", "vpn", "tunnel", "network", "split-tunneling", "proxy", "security"]
 
-[dependencies]
+[workspace]
+members = ["crates/*"]
 
-[build]
-c-sources = ["c/crypto.c", "c/proc_resolver.c", "c/buffer_pool.c", "c/thread_pool.c"]
-c-flags = ["-O2", "-std=c11", "-Wall", "-Wextra"]
-c-include-dirs = ["c"]
+[dependencies]
+vpn_common = { path = "crates/vpn_common" }
+vpn_client = { path = "crates/vpn_client" }
+vpn_server = { path = "crates/vpn_server" }
 
 [profile.release]
 opt-level = 3

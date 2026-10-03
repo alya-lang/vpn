@@ -3,7 +3,7 @@
 # Forward-protocol state is restored to Both at the end of the suite.
 import "std/test"
 import "std/net" as net
-import "../src/ffi.alya"
+import "vpn_common/ffi"
 
 function main()
     test_suite("UDP Relay Lifecycle Suite")

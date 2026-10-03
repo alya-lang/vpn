@@ -1,7 +1,7 @@
 # Unit tests for Alya VPN Framing and Protocol
 import "std/test"
-import "../src/common/crypto.alya" as crypto
-import "../src/common/protocol.alya" as proto
+import "vpn_common/crypto.alya" as crypto
+import "vpn_common/protocol.alya" as proto
 
 function main()
     test_suite("Alya VPN Protocol Framing Suite")

@@ -45,6 +45,15 @@ jobs:
         run: |
           alya --version
 
+      - name: Install workspace dependencies
+        run: |
+          alya install
+
+      - name: Verify workspace members
+        run: |
+          alya pkg list
+          alya check --workspace
+
       - name: Run crypto test suite
         run: |
           alya run tests/test_crypto.alya

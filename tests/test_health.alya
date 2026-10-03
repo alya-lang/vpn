@@ -2,7 +2,7 @@
 # Binds a real loopback listen socket, performs HTTP exchanges through it.
 import "std/test"
 import "std/net" as net
-import "../src/ffi.alya"
+import "vpn_common/ffi"
 
 function main()
     test_suite("Health Endpoint Suite")

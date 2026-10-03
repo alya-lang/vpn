@@ -1,13 +1,13 @@
 # Alya VPN - Next-Gen Split-Tunneling Encrypted VPN
 # CLI Entry point supporting Server, Client (SOCKS5 + Split Tunneling), and Diagnostic commands
 
-import "./server/forwarder.alya" as server
-import "./client/local_proxy.alya" as client
-import "./client/resolver.alya" as resolver
-import "./client/router.alya" as router
-import "./common/crypto.alya" as crypto
-import "./common/protocol.alya" as proto
-import "./common/logging.alya" as vlog
+import "vpn_server/forwarder" as server
+import "vpn_client/local_proxy" as client
+import "vpn_client/resolver" as resolver
+import "vpn_client/router" as router
+import "vpn_common/crypto" as crypto
+import "vpn_common/protocol" as proto
+import "vpn_common/logging" as vlog
 
 function print_banner()
     say("=================================================================")

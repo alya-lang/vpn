@@ -1,0 +1,9 @@
+# vpn_common library facade: pulls every module into the member entry so
+# `check`/`build` verify the whole closure. Imports double as the member
+# surface (see the lint rule docs), hence the file-level suppression below.
+# alya-lint: disable unused-import
+import "./ffi.alya"
+import "./crypto.alya"
+import "./protocol.alya"
+import "./logging.alya"
+import "./thread_pool.alya"

@@ -1,6 +1,6 @@
 # Tests for forward protocol parsing (tcp / udp / both)
 import "std/test"
-import "../src/common/protocol.alya" as proto
+import "vpn_common/protocol.alya" as proto
 
 function main()
     test_suite("Forward Protocol Mode Suite")

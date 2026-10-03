@@ -1,6 +1,6 @@
 # Cryptography Unit Test for Alya VPN
 import "std/test"
-import "../src/common/crypto.alya" as vpn_crypto
+import "vpn_common/crypto.alya" as vpn_crypto
 
 function main()
     test_suite("Alya VPN Crypto Test Suite")

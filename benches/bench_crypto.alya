@@ -1,5 +1,5 @@
 # Micro-benchmark for Alya VPN Cryptography Engine
-import "../src/common/crypto.alya" as crypto
+import "vpn_common/crypto.alya" as crypto
 
 function main()
     say("=== Alya VPN Cryptography Benchmark ===")

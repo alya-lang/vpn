@@ -240,34 +240,48 @@ alya run src/main.alya -- benchmark
 
 ```text
 App/vpn/
-├── alya.toml               # Package manifest with [build] C directive
+├── alya.toml               # Root package (CLI) + [workspace] members
 ├── .gitignore              # Ignored build artifacts & temp files
 ├── README.md               # Project documentation
-├── c/                      # Native C acceleration engine
-│   ├── crypto.h            # ChaCha20-Poly1305 & SHA-256 declarations
-│   ├── crypto.c            # Embedded C cryptography implementation
-│   ├── proc_resolver.h     # Native OS socket-to-process lookup header
-│   └── proc_resolver.c     # Win32 & Linux process inspection
 ├── config/                 # Sample configuration files
 │   ├── client.toml         # Client split-tunneling & proxy settings
 │   └── server.toml         # Server listen & authentication settings
+├── crates/
+│   ├── vpn_common/         # Shared primitives (lib)
+│   │   ├── alya.toml       # Owns the [build] C directive
+│   │   ├── c/              # Native C acceleration engine
+│   │   │   ├── crypto.h    # ChaCha20-Poly1305 & SHA-256 declarations
+│   │   │   ├── crypto.c    # Embedded C cryptography implementation
+│   │   │   ├── proc_resolver.h # Native OS socket-to-process lookup header
+│   │   │   └── proc_resolver.c # Win32 & Linux process inspection
+│   │   └── src/
+│   │       ├── lib.alya    # Member facade (entry point)
+│   │       ├── ffi.alya    # Low-level extern C function declarations
+│   │       ├── crypto.alya # High-level Alya cryptographic API
+│   │       ├── protocol.alya # AV01 framing, packet serializer & parser
+│   │       ├── logging.alya# Structured logging helpers
+│   │       └── thread_pool.alya # Native thread-pool wrapper
+│   ├── vpn_client/         # Client: proxy, resolver, router (lib)
+│   └── vpn_server/         # Server: tunnel forwarder (lib)
 ├── src/
-│   ├── main.alya           # CLI entry point and argument dispatcher
-│   ├── ffi.alya            # Low-level extern C function declarations
-│   ├── common/
-│   │   ├── crypto.alya     # High-level Alya cryptographic API
-│   │   └── protocol.alya   # AV01 framing, packet serializer & parser
-│   ├── client/
-│   │   ├── resolver.alya   # Process inspection wrapper
-│   │   ├── router.alya     # Whitelist / Blacklist pattern matcher
-│   │   └── local_proxy.alya# SOCKS5 server & traffic relay
-│   └── server/
-│       └── forwarder.alya  # Multi-client TCP decrypt & target relay
+│   └── main.alya           # CLI entry point and argument dispatcher
 └── tests/
     ├── test_crypto.alya    # Crypto unit tests
     ├── test_protocol.alya  # Protocol serialization tests
     ├── test_rules.alya     # Split-tunneling pattern tests
     └── test_e2e.alya       # Full end-to-end simulation tests
+```
+
+This repository is an Alya **workspace**: one root package (the CLI) plus
+three member libraries sharing a single `alya.lock`. Useful commands from
+the root:
+
+```bash
+alya install              # shared alya.lock for root + members
+alya check --workspace    # verify every member
+alya build --workspace    # build every member (C links through vpn_common)
+alya test --workspace     # member test suites
+alya run src/main.alya -- server   # run the server (explicit file, single target)
 ```
 
 ---

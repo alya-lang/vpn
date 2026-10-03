@@ -1,0 +1,11 @@
+[package]
+name = "vpn_client"
+version = "0.1.0"
+alya-version = "0.0.19"
+entry = "src/lib.alya"
+description = "VPN client: local proxy, resolver, router"
+authors = ["Alya Language Contributors <https://github.com/alya-lang>"]
+license = "MIT"
+
+[dependencies]
+vpn_common = { path = "../vpn_common" }

@@ -3,10 +3,10 @@
 
 import "std/net" as net
 import "./resolver.alya" as resolver
-import "../common/crypto.alya" as crypto
-import "../common/protocol.alya" as proto
-import "../common/thread_pool.alya" as tpool
-import "../ffi.alya"
+import "vpn_common/crypto.alya" as crypto
+import "vpn_common/protocol.alya" as proto
+import "vpn_common/thread_pool.alya" as tpool
+import "vpn_common/ffi"
 
 # Reads SOCKS5 target host and port from client request.
 # Returns: 1 + host + port (TCP CONNECT), 2 + "udp.associate" + 0

@@ -1,7 +1,7 @@
 # Alya VPN - High-level Cryptography API
 # Wraps ChaCha20-Poly1305 AEAD and SHA-256 Key Derivation
 
-import "../ffi.alya"
+import "./ffi.alya"
 
 # Allocates a zero-initialized string buffer of exact byte length
 function alloc_str(count)

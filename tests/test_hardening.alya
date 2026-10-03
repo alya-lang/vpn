@@ -1,9 +1,9 @@
 # Hardening tests: malformed frames, invalid sockets and hostile patterns
 # must surface as clean rejections, never as crashes.
 import "std/test"
-import "../src/common/crypto.alya" as crypto
-import "../src/common/protocol.alya" as proto
-import "../src/ffi.alya"
+import "vpn_common/crypto.alya" as crypto
+import "vpn_common/protocol.alya" as proto
+import "vpn_common/ffi"
 
 function main()
     test_suite("Hardening Suite")

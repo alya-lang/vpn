@@ -1,6 +1,6 @@
 # Unit tests for client log labels (unknown processes carry peer port).
 import "std/test"
-import "../src/client/local_proxy.alya" as proxy
+import "vpn_client/local_proxy.alya" as proxy
 
 function main()
     test_suite("Client Log Label Suite")
