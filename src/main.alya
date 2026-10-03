@@ -107,7 +107,7 @@ end
 
 # Loads client configuration from config/client.toml
 function load_client_config(config_path)
-    if file_exists(config_path) == 0
+    if file_exists(config_path) == false
         return null
     end
     let content = read_file(config_path)
@@ -267,7 +267,7 @@ end
 
 # Loads server configuration from config/server.toml
 function load_server_config(config_path)
-    if file_exists(config_path) == 0
+    if file_exists(config_path) == false
         return null
     end
     let content = read_file(config_path)
