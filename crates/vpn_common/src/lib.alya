@@ -1,3 +1,5 @@
+## Shared primitives entry: crypto, protocol, logging, thread pool, native FFI.
+
 # vpn_common library facade: pulls every module into the member entry so
 # `check`/`build` verify the whole closure. Imports double as the member
 # surface (see the lint rule docs), hence the file-level suppression below.
