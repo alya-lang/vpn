@@ -21,7 +21,7 @@ function main()
         end
 
         let decrypted = crypto::vpn_decrypt(key, nonce, cipher, tag)
-        if decrypted == null
+        if decrypted is null
             fail_count += 1
         end
         i += 1

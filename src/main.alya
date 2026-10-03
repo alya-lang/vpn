@@ -436,19 +436,19 @@ function main()
         # Check default config/server.toml if exists
         let srv_cfg_file = "config/server.toml"
         let file_cfg = load_server_config(srv_cfg_file)
-        if file_cfg != null
-            if file_cfg["bind_address"] != null
+        if file_cfg is not null
+            if file_cfg["bind_address"] is not null
                 bind_address = file_cfg["bind_address"]
             end
             port = file_cfg["port"]
             pass = file_cfg["passphrase"]
-            if file_cfg["protocol"] != null and len(file_cfg["protocol"]) > 0
+            if file_cfg["protocol"] is not null and len(file_cfg["protocol"]) > 0
                 forward_protocol_str = file_cfg["protocol"]
             end
-            if file_cfg["log_level"] != null and len(file_cfg["log_level"]) > 0
+            if file_cfg["log_level"] is not null and len(file_cfg["log_level"]) > 0
                 log_level_str = file_cfg["log_level"]
             end
-            if file_cfg["health_port"] != null and file_cfg["health_port"] >= 0
+            if file_cfg["health_port"] is not null and file_cfg["health_port"] >= 0
                 health_port = file_cfg["health_port"]
             end
             crypto_threads = file_cfg["crypto_threads"]
@@ -458,13 +458,13 @@ function main()
             if file_cfg["block_lan_destinations"] == "false" or file_cfg["block_lan_destinations"] == "0"
                 block_lan = 0
             end
-            if file_cfg["idle_timeout_sec"] != null and file_cfg["idle_timeout_sec"] >= 0
+            if file_cfg["idle_timeout_sec"] is not null and file_cfg["idle_timeout_sec"] >= 0
                 idle_timeout_sec = file_cfg["idle_timeout_sec"]
             end
             if file_cfg["show_stats"] == "true" or file_cfg["show_stats"] == "1"
                 show_stats = 1
             end
-            if file_cfg["stats_interval_sec"] != null and file_cfg["stats_interval_sec"] > 0
+            if file_cfg["stats_interval_sec"] is not null and file_cfg["stats_interval_sec"] > 0
                 stats_interval_sec = file_cfg["stats_interval_sec"]
             end
             if file_cfg["tcp_nodelay"] == "false" or file_cfg["tcp_nodelay"] == "0"
@@ -488,19 +488,19 @@ function main()
         while i < len(args_list)
             if args_list[i] == "--config" and i + 1 < len(args_list)
                 let custom_cfg = load_server_config(args_list[i + 1])
-                if custom_cfg != null
-                    if custom_cfg["bind_address"] != null
+                if custom_cfg is not null
+                    if custom_cfg["bind_address"] is not null
                         bind_address = custom_cfg["bind_address"]
                     end
                     port = custom_cfg["port"]
                     pass = custom_cfg["passphrase"]
-                    if custom_cfg["protocol"] != null and len(custom_cfg["protocol"]) > 0
+                    if custom_cfg["protocol"] is not null and len(custom_cfg["protocol"]) > 0
                         forward_protocol_str = custom_cfg["protocol"]
                     end
-                    if custom_cfg["log_level"] != null and len(custom_cfg["log_level"]) > 0
+                    if custom_cfg["log_level"] is not null and len(custom_cfg["log_level"]) > 0
                         log_level_str = custom_cfg["log_level"]
                     end
-                    if custom_cfg["health_port"] != null and custom_cfg["health_port"] >= 0
+                    if custom_cfg["health_port"] is not null and custom_cfg["health_port"] >= 0
                         health_port = custom_cfg["health_port"]
                     end
                     crypto_threads = custom_cfg["crypto_threads"]
@@ -510,13 +510,13 @@ function main()
                     if custom_cfg["block_lan_destinations"] == "false" or custom_cfg["block_lan_destinations"] == "0"
                         block_lan = 0
                     end
-                    if custom_cfg["idle_timeout_sec"] != null and custom_cfg["idle_timeout_sec"] >= 0
+                    if custom_cfg["idle_timeout_sec"] is not null and custom_cfg["idle_timeout_sec"] >= 0
                         idle_timeout_sec = custom_cfg["idle_timeout_sec"]
                     end
                     if custom_cfg["show_stats"] == "true" or custom_cfg["show_stats"] == "1"
                         show_stats = 1
                     end
-                    if custom_cfg["stats_interval_sec"] != null and custom_cfg["stats_interval_sec"] > 0
+                    if custom_cfg["stats_interval_sec"] is not null and custom_cfg["stats_interval_sec"] > 0
                         stats_interval_sec = custom_cfg["stats_interval_sec"]
                     end
                     if custom_cfg["tcp_nodelay"] == "false" or custom_cfg["tcp_nodelay"] == "0"
@@ -695,21 +695,21 @@ function main()
         # 1. Automatically load config/client.toml if present
         let cfg_file = "config/client.toml"
         let file_cfg = load_client_config(cfg_file)
-        if file_cfg != null
+        if file_cfg is not null
             srv_host = file_cfg["server_host"]
             srv_port = file_cfg["server_port"]
             proxy_port = file_cfg["local_port"]
-            if file_cfg["udp_relay_port"] != null and file_cfg["udp_relay_port"] >= 0
+            if file_cfg["udp_relay_port"] is not null and file_cfg["udp_relay_port"] >= 0
                 udp_relay_port_cfg = file_cfg["udp_relay_port"]
             end
-            if file_cfg["bind_address"] != null
+            if file_cfg["bind_address"] is not null
                 bind_address = file_cfg["bind_address"]
             end
             pass = file_cfg["passphrase"]
-            if file_cfg["protocol"] != null and len(file_cfg["protocol"]) > 0
+            if file_cfg["protocol"] is not null and len(file_cfg["protocol"]) > 0
                 forward_protocol_str = file_cfg["protocol"]
             end
-            if file_cfg["log_level"] != null and len(file_cfg["log_level"]) > 0
+            if file_cfg["log_level"] is not null and len(file_cfg["log_level"]) > 0
                 log_level_str = file_cfg["log_level"]
             end
             crypto_threads = file_cfg["crypto_threads"]
@@ -746,25 +746,25 @@ function main()
             if file_cfg["show_stats"] == "true" or file_cfg["show_stats"] == "1"
                 show_stats = 1
             end
-            if file_cfg["stats_interval_sec"] != null and file_cfg["stats_interval_sec"] > 0
+            if file_cfg["stats_interval_sec"] is not null and file_cfg["stats_interval_sec"] > 0
                 stats_interval_sec = file_cfg["stats_interval_sec"]
             end
-            if file_cfg["idle_timeout_sec"] != null and file_cfg["idle_timeout_sec"] >= 0
+            if file_cfg["idle_timeout_sec"] is not null and file_cfg["idle_timeout_sec"] >= 0
                 idle_timeout_sec = file_cfg["idle_timeout_sec"]
             end
-            if file_cfg["ping_interval_sec"] != null and file_cfg["ping_interval_sec"] >= 0
+            if file_cfg["ping_interval_sec"] is not null and file_cfg["ping_interval_sec"] >= 0
                 ping_interval_sec = file_cfg["ping_interval_sec"]
             end
-            if file_cfg["reconnect_attempts"] != null and file_cfg["reconnect_attempts"] >= 0
+            if file_cfg["reconnect_attempts"] is not null and file_cfg["reconnect_attempts"] >= 0
                 reconnect_attempts = file_cfg["reconnect_attempts"]
             end
-            if file_cfg["reconnect_interval_ms"] != null and file_cfg["reconnect_interval_ms"] > 0
+            if file_cfg["reconnect_interval_ms"] is not null and file_cfg["reconnect_interval_ms"] > 0
                 reconnect_interval_ms = file_cfg["reconnect_interval_ms"]
             end
-            if file_cfg["handshake_timeout_ms"] != null and file_cfg["handshake_timeout_ms"] > 0
+            if file_cfg["handshake_timeout_ms"] is not null and file_cfg["handshake_timeout_ms"] > 0
                 handshake_timeout_ms = file_cfg["handshake_timeout_ms"]
             end
-            if file_cfg["connect_timeout_ms"] != null and file_cfg["connect_timeout_ms"] > 0
+            if file_cfg["connect_timeout_ms"] is not null and file_cfg["connect_timeout_ms"] > 0
                 connect_timeout_ms = file_cfg["connect_timeout_ms"]
             end
             if len(file_cfg["apps"]) > 0
@@ -788,21 +788,21 @@ function main()
         while i < len(args_list)
             if args_list[i] == "--config" and i + 1 < len(args_list)
                 let custom_cfg = load_client_config(args_list[i + 1])
-                if custom_cfg != null
+                if custom_cfg is not null
                     srv_host = custom_cfg["server_host"]
                     srv_port = custom_cfg["server_port"]
                     proxy_port = custom_cfg["local_port"]
-                    if custom_cfg["udp_relay_port"] != null and custom_cfg["udp_relay_port"] >= 0
+                    if custom_cfg["udp_relay_port"] is not null and custom_cfg["udp_relay_port"] >= 0
                         udp_relay_port_cfg = custom_cfg["udp_relay_port"]
                     end
-                    if custom_cfg["bind_address"] != null
+                    if custom_cfg["bind_address"] is not null
                         bind_address = custom_cfg["bind_address"]
                     end
                     pass = custom_cfg["passphrase"]
-                    if custom_cfg["protocol"] != null and len(custom_cfg["protocol"]) > 0
+                    if custom_cfg["protocol"] is not null and len(custom_cfg["protocol"]) > 0
                         forward_protocol_str = custom_cfg["protocol"]
                     end
-                    if custom_cfg["log_level"] != null and len(custom_cfg["log_level"]) > 0
+                    if custom_cfg["log_level"] is not null and len(custom_cfg["log_level"]) > 0
                         log_level_str = custom_cfg["log_level"]
                     end
                     crypto_threads = custom_cfg["crypto_threads"]
@@ -839,25 +839,25 @@ function main()
                     if custom_cfg["show_stats"] == "true" or custom_cfg["show_stats"] == "1"
                         show_stats = 1
                     end
-                    if custom_cfg["stats_interval_sec"] != null and custom_cfg["stats_interval_sec"] > 0
+                    if custom_cfg["stats_interval_sec"] is not null and custom_cfg["stats_interval_sec"] > 0
                         stats_interval_sec = custom_cfg["stats_interval_sec"]
                     end
-                    if custom_cfg["idle_timeout_sec"] != null and custom_cfg["idle_timeout_sec"] >= 0
+                    if custom_cfg["idle_timeout_sec"] is not null and custom_cfg["idle_timeout_sec"] >= 0
                         idle_timeout_sec = custom_cfg["idle_timeout_sec"]
                     end
-                    if custom_cfg["ping_interval_sec"] != null and custom_cfg["ping_interval_sec"] >= 0
+                    if custom_cfg["ping_interval_sec"] is not null and custom_cfg["ping_interval_sec"] >= 0
                         ping_interval_sec = custom_cfg["ping_interval_sec"]
                     end
-                    if custom_cfg["reconnect_attempts"] != null and custom_cfg["reconnect_attempts"] >= 0
+                    if custom_cfg["reconnect_attempts"] is not null and custom_cfg["reconnect_attempts"] >= 0
                         reconnect_attempts = custom_cfg["reconnect_attempts"]
                     end
-                    if custom_cfg["reconnect_interval_ms"] != null and custom_cfg["reconnect_interval_ms"] > 0
+                    if custom_cfg["reconnect_interval_ms"] is not null and custom_cfg["reconnect_interval_ms"] > 0
                         reconnect_interval_ms = custom_cfg["reconnect_interval_ms"]
                     end
-                    if custom_cfg["handshake_timeout_ms"] != null and custom_cfg["handshake_timeout_ms"] > 0
+                    if custom_cfg["handshake_timeout_ms"] is not null and custom_cfg["handshake_timeout_ms"] > 0
                         handshake_timeout_ms = custom_cfg["handshake_timeout_ms"]
                     end
-                    if custom_cfg["connect_timeout_ms"] != null and custom_cfg["connect_timeout_ms"] > 0
+                    if custom_cfg["connect_timeout_ms"] is not null and custom_cfg["connect_timeout_ms"] > 0
                         connect_timeout_ms = custom_cfg["connect_timeout_ms"]
                     end
                     if len(custom_cfg["apps"]) > 0
@@ -1133,12 +1133,12 @@ function main()
         let i = 0
         while i < iters
             let frame = proto::pack_frame(key, proto::msg_data(), payload)
-            if frame == null
+            if frame is null
                 say("[BENCH] Packing error at iteration " + i)
                 return 1
             end
             let msg_type, plain = proto::unpack_frame(key, frame)
-            if msg_type != proto::msg_data() or plain == null
+            if msg_type != proto::msg_data() or plain is null
                 say("[BENCH] Unpacking error at iteration " + i)
                 return 1
             end

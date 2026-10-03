@@ -196,7 +196,7 @@ function vpn_run_client_proxy(cfg)
     # 8. UDP relay for SOCKS5 UDP ASSOCIATE (UDP-over-TCP tunnel).
     # Disabled in TCP-only mode. Port from udp_relay_port setting.
     let configured_udp_port = cfg["udp_relay_port"]
-    if configured_udp_port == null
+    if configured_udp_port is null
         configured_udp_port = 0
     end
     let udp_relay_port = -1

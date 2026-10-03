@@ -281,7 +281,7 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
         if target_sock < 0
             let resp_payload = proto::pack_connect_resp_payload(ch_id, proto::status_connect_failed(), "Connection refused")
             let resp_frame = proto::pack_frame(session_key, proto::msg_connect_resp(), resp_payload)
-            if resp_frame != null
+            if resp_frame is not null
                 net::tcp_send(client_sock, resp_frame)
             end
             return false
@@ -291,7 +291,7 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
 
         let ok_payload = proto::pack_connect_resp_payload(ch_id, proto::status_ok(), "Connected")
         let ok_frame = proto::pack_frame(session_key, proto::msg_connect_resp(), ok_payload)
-        if ok_frame != null
+        if ok_frame is not null
             net::tcp_send(client_sock, ok_frame)
         end
         return true
@@ -327,7 +327,7 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
     # PING / KEEP-ALIVE
     if msg_type == proto::msg_ping()
         let pong_frame = proto::pack_frame(session_key, proto::msg_pong(), "PONG")
-        if pong_frame != null
+        if pong_frame is not null
             net::tcp_send(client_sock, pong_frame)
         end
         return true
