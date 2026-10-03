@@ -12,10 +12,10 @@ import "vpn_common/ffi"
 # Returns 1 when a connection was accepted, else 0.
 function server_poll_accept(listen_sock, timeout_ms, allowed_clients, max_clients, log_client_events, client_thread_handler)
     if listen_sock < 0
-        return 0
+        return false
     end
-    if net::tcp_poll(listen_sock, timeout_ms) != 1
-        return 0
+    if net::tcp_poll(listen_sock, timeout_ms) != true
+        return false
     end
     let client_sock = -1
     try
@@ -24,42 +24,42 @@ function server_poll_accept(listen_sock, timeout_ms, allowed_clients, max_client
         client_sock = -1
     end
     if client_sock < 0
-        return 0
+        return false
     end
     let client_ip = net::tcp_peer_ip(client_sock)
     let client_port = net::tcp_peer_port(client_sock)
 
     # Check IP whitelist if configured
-    let allowed = 1
+    let allowed = true
     if len(allowed_clients) > 0
-        allowed = 0
+        allowed = false
         let aci = 0
         while aci < len(allowed_clients)
             if allowed_clients[aci] == client_ip
-                allowed = 1
+                allowed = true
                 break
             end
             aci += 1
         end
     end
 
-    if allowed == 0
+    if allowed == false
         say("[WARN] Connection rejected from unauthorized client: " + client_ip)
         net::tcp_close(client_sock)
     else
         # Atomically enforce max clients limit
-        if alya_vpn_srv_client_connected() == 0
+        if alya_vpn_srv_client_connected() == false
             say("[WARN] Connection rejected: server reached maximum capacity (" + max_clients + " clients)")
             net::tcp_close(client_sock)
         else
-            if log_client_events == 1
+            if log_client_events == true
                 say("[INFO] Client connected from " + client_ip + ":" + client_port + " (" + alya_vpn_srv_get_active_clients() + "/" + max_clients + " active)")
             end
             # Spawn via handler supplied by the importing entrypoint.
             thread::thread_spawn(client_thread_handler, client_sock)
         end
     end
-    return 1
+    return true
 end
 
 function vpn_run_server(cfg, client_thread_handler)
@@ -145,15 +145,15 @@ function vpn_run_server(cfg, client_thread_handler)
     tpool::thread_pool_assign_channel_worker(-1, 0)
 
     let nodelay_str = "OFF"
-    if tcp_nodelay == 1
+    if tcp_nodelay == true
         nodelay_str = "ON (Low latency)"
     end
     let log_str = "OFF (Silent)"
-    if log_connections == 1
+    if log_connections == true
         log_str = "ON (Forward channel events)"
     end
     let ssrf_str = "ENABLED (Protect local networks & cloud metadata)"
-    if block_lan == 0
+    if block_lan == false
         ssrf_str = "DISABLED"
     end
     let proto_str = when forward_protocol
@@ -192,14 +192,14 @@ function vpn_run_server(cfg, client_thread_handler)
         # IPv4 listener blocks up to 500ms; IPv6 backlog drains without blocking.
         server_poll_accept(server_sock, 500, allowed_clients, max_clients, log_client_events, client_thread_handler)
         if server_sock6 >= 0
-            let drained = 1
-            while drained == 1
+            let drained = true
+            while drained == true
                 drained = server_poll_accept(server_sock6, 0, allowed_clients, max_clients, log_client_events, client_thread_handler)
             end
         end
 
         # Periodic statistics report
-        if show_stats == 1
+        if show_stats == true
             let now_ms = alya_vpn_get_time_ms()
             if (now_ms - last_stats_ms) >= (stats_interval_sec * 1000)
                 say("[STATS] " + alya_vpn_stats_get_summary())
@@ -248,17 +248,17 @@ function vpn_handle_client(client_sock, _session_key)
     alya_vpn_srv_udp_clear()
 
     while 1
-        let activity = 0
+        let activity = false
         let res = alya_vpn_pump_server_vpn(client_sock)
         if res < 0 or res == 4294967295 or res == -1
             # Client disconnected
             break
         else if res > 0
-            activity = 1
+            activity = true
         end
 
         # Sleep 1ms only when idle — prevents busy-wait without adding latency
-        if activity == 0
+        if activity == false
             alya_vpn_sleep_ms(1)
         end
     end
@@ -273,8 +273,8 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
     # CONNECT REQUEST
     if msg_type == proto::msg_connect_req()
         let ok, ch_id, proto_type, host, port = proto::unpack_connect_req_payload(payload)
-        if ok == 0
-            return 0
+        if ok == false
+            return false
         end
 
         let target_sock = net::tcp_connect(host, port)
@@ -284,7 +284,7 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
             if resp_frame != null
                 net::tcp_send(client_sock, resp_frame)
             end
-            return 0
+            return false
         end
 
         alya_vpn_srv_ch_set(ch_id, target_sock)
@@ -294,34 +294,34 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
         if ok_frame != null
             net::tcp_send(client_sock, ok_frame)
         end
-        return 1
+        return true
     end
 
     # DATA FORWARD
     if msg_type == proto::msg_data()
         let ok, ch_id, raw_hex = proto::unpack_data_payload(payload)
-        if ok == 0
-            return 0
+        if ok == false
+            return false
         end
 
         let target_sock = alya_vpn_srv_ch_get(ch_id)
         if target_sock >= 0
             alya_vpn_sock_send_hex(target_sock, raw_hex, len(raw_hex))
         end
-        return 1
+        return true
     end
 
     # CHANNEL CLOSE
     if msg_type == proto::msg_close()
         let ok, ch_id, reason = proto::unpack_close_payload(payload)
-        if ok == 1
+        if ok == true
             let s = alya_vpn_srv_ch_get(ch_id)
             if s >= 0
                 net::tcp_close(s)
                 alya_vpn_srv_ch_remove(ch_id)
             end
         end
-        return 1
+        return true
     end
 
     # PING / KEEP-ALIVE
@@ -330,8 +330,8 @@ function vpn_process_client_message(client_sock, session_key, msg_type, payload)
         if pong_frame != null
             net::tcp_send(client_sock, pong_frame)
         end
-        return 1
+        return true
     end
 
-    return 0
+    return false
 end
