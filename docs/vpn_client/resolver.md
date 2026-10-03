@@ -56,4 +56,4 @@ Resolves UDP local port to process name
 | `local_port` | `auto` | `-` |
 ---
 
-[↑ Workspace](../index.md)
+[← All modules](index.md) · [↑ Workspace](../index.md)

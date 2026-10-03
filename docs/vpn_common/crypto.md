@@ -86,4 +86,4 @@ Returns plaintext string on success, or null if authentication/tag check fails
 | `tag_hex` | `auto` | `-` |
 ---
 
-[↑ Workspace](../index.md)
+[← All modules](index.md) · [↑ Workspace](../index.md)

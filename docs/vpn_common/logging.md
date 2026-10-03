@@ -41,4 +41,4 @@ Parses a log_level value (case-insensitive). Unknown values keep Info.
 **Returns:** `LogLevel`
 ---
 
-[↑ Workspace](../index.md)
+[← All modules](index.md) · [↑ Workspace](../index.md)

@@ -6,4 +6,4 @@ Connects Alya runtime to high-speed ChaCha20-Poly1305 and OS process inspection 
 ## Table of Contents
 ---
 
-[↑ Workspace](../index.md)
+[← All modules](index.md) · [↑ Workspace](../index.md)

@@ -95,4 +95,4 @@ Processes decrypted message from client (for backward compatibility)
 | `payload` | `auto` | `-` |
 ---
 
-[↑ Workspace](../index.md)
+[← All modules](index.md) · [↑ Workspace](../index.md)

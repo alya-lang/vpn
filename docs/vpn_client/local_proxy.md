@@ -129,4 +129,4 @@ Starts the local SOCKS5 proxy and routes traffic according to split-tunneling co
 | `cfg` | `auto` | `-` |
 ---
 
-[↑ Workspace](../index.md)
+[← All modules](index.md) · [↑ Workspace](../index.md)

@@ -402,4 +402,4 @@ Returns tuple: msg_type, plaintext (or 0, null on failure)
 | `frame_line` | `auto` | `-` |
 ---
 
-[↑ Workspace](../index.md)
+[← All modules](index.md) · [↑ Workspace](../index.md)

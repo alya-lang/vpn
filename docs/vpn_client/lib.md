@@ -5,4 +5,4 @@ Client entry: local proxy, resolver, router.
 ## Table of Contents
 ---
 
-[↑ Workspace](../index.md)
+[← All modules](index.md) · [↑ Workspace](../index.md)

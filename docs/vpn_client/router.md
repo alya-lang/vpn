@@ -101,4 +101,4 @@ of silently changing behavior.
 | `default_mode` | `auto` | `-` |
 ---
 
-[↑ Workspace](../index.md)
+[← All modules](index.md) · [↑ Workspace](../index.md)
