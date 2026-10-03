@@ -114,6 +114,13 @@ function main()
 
     runner_assert_eq(r, file_exists("config/client.toml"), 1, "config/client.toml must exist (run alya test from App/vpn)")
     runner_assert_eq(r, file_exists("config/server.toml"), 1, "config/server.toml must exist (run alya test from App/vpn)")
+    # Wrong working directory (e.g. `alya test` from App/ instead of App/vpn):
+    # stop here so missing files fail fast instead of cascading nulls
+    # through lower()/toml parsing below.
+    if file_exists("config/client.toml") == false or file_exists("config/server.toml") == false
+        runner_summary(r)
+        exit(1)
+    end
     let client = read_file("config/client.toml")
     let server = read_file("config/server.toml")
 
