@@ -10,13 +10,13 @@ function alloc_str(count)
     end
     let res = "0"
     while len(res) * 2 <= count
-        res = res + res
+        res += res
     end
     while len(res) + 16 <= count
-        res = res + "0000000000000000"
+        res += "0000000000000000"
     end
     while len(res) < count
-        res = res + "0"
+        res += "0"
     end
     return res
 end

@@ -81,7 +81,7 @@ function reconnect_vpn(server_host, server_port, reconnect_attempts, reconnect_i
     while attempt <= reconnect_attempts or reconnect_attempts == 0
         let attempt_str = "" + attempt
         if reconnect_attempts > 0
-            attempt_str = attempt_str + "/" + reconnect_attempts
+            attempt_str += "/" + reconnect_attempts
         end
         say("[INFO] Reconnecting to VPN server (attempt " + attempt_str + " in " + (reconnect_interval_ms / 1000) + "s)...")
         alya_vpn_sleep_ms(reconnect_interval_ms)
