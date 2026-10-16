@@ -6,7 +6,7 @@ name = "vpn_client"
 version = "0.1.0"
 source = "path:crates/vpn_client"
 entry = "crates/vpn_client/src/lib.alya"
-checksum = "sha256:fa1e7befedeab7d269c6b8933a86ca43473a8cedf44ceb26ef4db4842accaa31"
+checksum = "sha256:cee669d30cd740cfe6e2b3015638ae22ac1ae72ae4b0d0939317bf5dc84fd3eb"
 dependencies = [
  "vpn_common",
 ]
@@ -16,14 +16,14 @@ name = "vpn_common"
 version = "0.1.0"
 source = "path:crates/vpn_common"
 entry = "crates/vpn_common/src/lib.alya"
-checksum = "sha256:2c084a07b9495b14f5999cbddac78a85a8193082ab261f1fafe67d37990e1b84"
+checksum = "sha256:2e3ea93cba0133a99c03f2fcd98c6f0247dc41bf20c0a466043a5e2670aabb87"
 
 [[package]]
 name = "vpn_server"
 version = "0.1.0"
 source = "path:crates/vpn_server"
 entry = "crates/vpn_server/src/lib.alya"
-checksum = "sha256:b22ccff5dc5d072b7e98d2889151649c77ff36ed15260f900e8b95f3d84f1500"
+checksum = "sha256:160c3aa7c823a1727f210aaa61d2f277c25cda2d38ea956e27cdeb9f01df6415"
 dependencies = [
  "vpn_common",
 ]
