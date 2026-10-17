@@ -4701,7 +4701,20 @@ int64_t alya_vpn_pump_server_vpn(int client_sock) {
 // Serves the optional monitoring socket the Alya layer opens when
 // health_port > 0. Always bound to 127.0.0.1 by the caller: never exposed.
 
-#define ALYA_VPN_VERSION_STR "0.2.12"
+// Fallback only: the Alya layer reports the running version through
+// alya_vpn_set_version_string at startup (this define had drifted from
+// alya.toml once the app version moved past 0.2.12).
+#define ALYA_VPN_VERSION_STR "0.2.13"
+
+static char s_version_str[32] = {0};
+
+// Copies the version the Alya layer reports. The input is a GC-managed
+// Alya string, so it must never be retained directly.
+void alya_vpn_set_version_string(const char *v) {
+    if (v == NULL || v[0] == '\0') return;
+    strncpy(s_version_str, v, sizeof(s_version_str) - 1);
+    s_version_str[sizeof(s_version_str) - 1] = '\0';
+}
 
 static uint32_t s_srv_start_ms = 0;
 static int s_srv_started = 0;
@@ -4724,6 +4737,7 @@ int64_t alya_vpn_health_poll(int health_sock) {
     uint32_t uptime;
     int blen;
     int hlen;
+    const char *ver;
 
     if (health_sock < 0) return 0;
     cs = (int)accept((SOCKET)health_sock, NULL, NULL);
@@ -4756,10 +4770,11 @@ int64_t alya_vpn_health_poll(int health_sock) {
         else if (total >= 11 && strncmp(req + 4, "/readyz", 7) == 0) ok = 1;
     }
     uptime = s_srv_started ? (get_time_ms() - s_srv_start_ms) / 1000 : 0;
+    ver = s_version_str[0] ? s_version_str : ALYA_VPN_VERSION_STR;
     if (ok) {
         blen = snprintf(body, sizeof(body),
             "{\"status\":\"ok\",\"version\":\"%s\",\"active_clients\":%d,\"max_clients\":%d,\"forward_protocol\":%d,\"uptime_sec\":%u}",
-            ALYA_VPN_VERSION_STR, alya_vpn_srv_get_active_clients(), alya_vpn_srv_get_max_clients(),
+            ver, alya_vpn_srv_get_active_clients(), alya_vpn_srv_get_max_clients(),
             alya_vpn_get_forward_protocol(), (unsigned int)uptime);
     } else {
         blen = snprintf(body, sizeof(body), "{\"status\":\"not-found\"}");

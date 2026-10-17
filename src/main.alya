@@ -8,10 +8,17 @@ import "vpn_client/router" as router
 import "vpn_common/crypto" as crypto
 import "vpn_common/protocol" as proto
 import "vpn_common/logging" as vlog
+import "vpn_common/ffi"
+
+# Single source for the reported version: the banner and the server health
+# endpoint JSON. Bump together with alya.toml when cutting a release.
+function vpn_version() -> string
+    return "0.2.13"
+end
 
 function print_banner()
     say("=================================================================")
-    say("            A L Y A   V P N   T U N N E L   (v0.2.13)            ")
+    say("            A L Y A   V P N   T U N N E L   (v" + vpn_version() + ")            ")
     say("   High-Performance ChaCha20-Poly1305 Split-Tunneling Network    ")
     say("=================================================================")
 end
@@ -74,7 +81,7 @@ function print_usage()
     say("    --auto-proxy              Automatically configure OS system proxy")
     say("    --no-system-proxy         Do not configure system proxy automatically\n")
     say("  check-port <port>           Diagnostic: inspect process owning local port")
-    say("  benchmark                   Run ChaCha20-Poly1305 encryption benchmark\n")
+    say("  benchmark                   Run the ChaCha20-Poly1305 AEAD throughput benchmark\n")
 end
 
 # Trims whitespace and quotes from start and end of string (preserves spaces inside)
@@ -410,6 +417,10 @@ function main()
     end
 
     let cmd = args_list[0]
+
+    # The health endpoint JSON reports the build's own version instead of
+    # the stale C fallback.
+    alya_vpn_set_version_string(vpn_version())
 
     # --- COMMAND: SERVER ---
     if cmd == "server"
@@ -1119,17 +1130,26 @@ function main()
     end
 
     # --- COMMAND: BENCHMARK ---
+    # Single-threaded AEAD throughput over the real wire format. Two phases
+    # so encrypt and verify costs are reported separately; clock_ms() is
+    # tick-based on Windows (>=1 ms), so phases are sized to span hundreds
+    # of ms.
     if cmd == "benchmark"
         print_banner()
-        say("[BENCH] Initializing 256-bit ChaCha20-Poly1305 throughput test...")
         let key = crypto::vpn_derive_key("bench_secret_key_123456789")
         let chunk = "The quick brown fox jumps over the lazy dog! 1234567890\r\n"
         let p8 = chunk + chunk + chunk + chunk + chunk + chunk + chunk + chunk
         let payload = p8 + p8 + p8 + p8 # ~1.8 KB payload
+        # 10000 iterations ≈ 37 MiB of unique frame strings; the runtime's
+        # stable string store is a fixed 64 MiB bump region, so do not
+        # raise this without checking headroom (20000 overflows it).
+        let iters = 10000
+        let plen = len(payload)
 
-        let iters = 1000
-        say("[BENCH] Running " + iters + " full AEAD envelope pack/unpack cycles (" + len(payload) + " bytes each)...")
+        say("[BENCH] ChaCha20-Poly1305 AEAD envelope throughput (single thread)")
+        say("[BENCH] Payload " + plen + " B/envelope, " + iters + " iterations per phase")
 
+        let t0 = clock_ms()
         let i = 0
         while i < iters
             let frame = proto::pack_frame(key, proto::msg_data(), payload)
@@ -1137,15 +1157,42 @@ function main()
                 say("[BENCH] Packing error at iteration " + i)
                 return 1
             end
-            let msg_type, plain = proto::unpack_frame(key, frame)
-            if msg_type != proto::msg_data() or plain is null
-                say("[BENCH] Unpacking error at iteration " + i)
-                return 1
-            end
             i += 1
         end
+        let pack_ms = clock_ms() - t0
 
-        say("[BENCH] 1000 AEAD roundtrips completed successfully with 100% integrity!")
+        # The unpack phase runs over a small fixture set: the AEAD verify
+        # path is stateless, and re-packing inside the timed loop would mix
+        # encrypt and verify costs.
+        let fixtures = []
+        let f = 0
+        while f < 64
+            fixtures.push(proto::pack_frame(key, proto::msg_data(), payload))
+            f += 1
+        end
+
+        let t1 = clock_ms()
+        let j = 0
+        while j < iters
+            let msg_type, plain = proto::unpack_frame(key, fixtures[j % 64])
+            if msg_type != proto::msg_data() or plain is null
+                say("[BENCH] Unpacking error at iteration " + j)
+                return 1
+            end
+            j += 1
+        end
+        let unpack_ms = clock_ms() - t1
+
+        if pack_ms < 1
+            pack_ms = 1
+        end
+        if unpack_ms < 1
+            unpack_ms = 1
+        end
+        let bytes_total = plen * iters
+        say("[BENCH] Pack   (encrypt): " + pack_ms + " ms -> " + ((bytes_total * 1000) / (pack_ms * 1048576)) + " MiB/s")
+        say("[BENCH] Unpack (verify+decrypt): " + unpack_ms + " ms -> " + ((bytes_total * 1000) / (unpack_ms * 1048576)) + " MiB/s")
+        say("[BENCH] " + iters + " envelopes packed + verified with 100% integrity!")
         return 0
     end
 

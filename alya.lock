@@ -16,7 +16,7 @@ name = "vpn_common"
 version = "0.1.0"
 source = "path:crates/vpn_common"
 entry = "crates/vpn_common/src/lib.alya"
-checksum = "sha256:2e3ea93cba0133a99c03f2fcd98c6f0247dc41bf20c0a466043a5e2670aabb87"
+checksum = "sha256:5b870df82655c71b08e48f939a5bf257294f926075a065d1a364c4ec75b1e668"
 
 [[package]]
 name = "vpn_server"

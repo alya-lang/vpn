@@ -80,6 +80,7 @@ extern "C"
 
     # Server health endpoint (loopback-only JSON over HTTP)
     function alya_vpn_note_server_start() -> void
+    function alya_vpn_set_version_string(v: str) -> void
     function alya_vpn_health_poll(health_sock: i32) -> i64
 
     # Server SSRF Protection & Port Restriction

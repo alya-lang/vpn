@@ -124,6 +124,9 @@ void alya_vpn_dns_cache_clear(void);
 
 // Server health endpoint (loopback-only JSON over HTTP).
 void alya_vpn_note_server_start(void);
+// Reports the running app version (copied into a static; Alya strings are
+// GC-managed and must never be retained across calls).
+void alya_vpn_set_version_string(const char *v);
 int64_t alya_vpn_health_poll(int health_sock);
 
 // Server SSRF Protection (Block LAN / Loopback destinations)
