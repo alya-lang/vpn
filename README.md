@@ -111,6 +111,41 @@ Any frame with an invalid Poly1305 MAC tag or invalid header is immediately drop
 
 ---
 
+## 📥 Download & Install
+
+Every tagged release ships prebuilt binaries for Linux, macOS and Windows (`x86_64` + `arm64`) with SHA-256 checksums — see [Releases](https://github.com/alya-lang/vpn/releases/latest):
+
+| Platform | Asset |
+|---|---|
+| Linux x86_64 / arm64 | `alya-vpn-v<version>-x86_64-linux.tar.gz` / `...-arm64-linux.tar.gz` |
+| macOS x86_64 / arm64 | `alya-vpn-v<version>-x86_64-macos.tar.gz` / `...-arm64-macos.tar.gz` |
+| Windows x86_64 / arm64 | `alya-vpn-v<version>-x86_64-windows.zip` / `...-arm64-windows.zip` |
+
+```bash
+# Linux x86_64 example (replace VERSION with the current tag, e.g. v0.2.13)
+VERSION=v0.2.13
+curl -LO "https://github.com/alya-lang/vpn/releases/download/${VERSION}/alya-vpn-${VERSION}-x86_64-linux.tar.gz"
+curl -LO "https://github.com/alya-lang/vpn/releases/download/${VERSION}/alya-vpn-${VERSION}-x86_64-linux.tar.gz.sha256"
+sha256sum -c "alya-vpn-${VERSION}-x86_64-linux.tar.gz.sha256"   # macOS: shasum -a 256 -c
+tar -xzf "alya-vpn-${VERSION}-x86_64-linux.tar.gz"
+cd "alya-vpn-${VERSION}-x86_64-linux"
+./alya-vpn --help
+```
+
+Windows zips unpack to `alya-vpn.exe` and can be verified with `Get-FileHash -Algorithm SHA256`. Each archive bundles the binary, the documented `config/*.toml` samples, `README.md` and `LICENSE`.
+
+### Building from source (pinned dependencies)
+
+The repository commits its `alya.lock`; `alya install` resolves exactly the locked workspace-member set, so builds are reproducible across machines:
+
+```bash
+git clone https://github.com/alya-lang/vpn && cd vpn
+alya install                       # resolve the committed alya.lock
+alya build src/main.alya -o alya-vpn
+```
+
+---
+
 ## 💻 Quick Start & Usage
 
 ### Prerequisites
@@ -196,6 +231,29 @@ a proxy works, raw UDP/ICMP/ping from proxy-unaware apps does not enter it:
 
 ---
 
+## 📊 Performance
+
+`benchmark` measures single-threaded ChaCha20-Poly1305 throughput through the `AV01` envelope: **pack** = AEAD encrypt + hex framing, **unpack** = parse + Poly1305 verify + decrypt, over 1824-byte payloads. CI runs the same command on every push (Linux/Windows/macOS, x64/ARM64):
+
+```bash
+./alya-vpn benchmark               # prebuilt binary
+# or: alya run src/main.alya -- benchmark
+```
+
+Example output (Windows 11 x86_64, Intel i7-11800H; run-to-run spread ~10%):
+
+```text
+[BENCH] ChaCha20-Poly1305 AEAD envelope throughput (single thread)
+[BENCH] Payload 1824 B/envelope, 10000 iterations per phase
+[BENCH] Pack   (encrypt): 144 ms -> 120 MiB/s
+[BENCH] Unpack (verify+decrypt): 266 ms -> 65 MiB/s
+[BENCH] 10000 envelopes packed + verified with 100% integrity!
+```
+
+Numbers depend on CPU, OS and the C toolchain; the cipher core is always compiled with `-O2` through Alya's native `[build]` directive (no external runtime libraries). Bulk tunnel traffic rides the native binary `AV02` framing on the same cipher core.
+
+---
+
 ## 🛠️ CLI Reference
 
 ```text
@@ -203,7 +261,7 @@ Commands:
   server          Starts the remote Alya VPN server daemon
   client          Starts the local SOCKS5 proxy and split-tunneling client
   check-port      Inspects a local port and prints the owning process name
-  benchmark       Executes ChaCha20-Poly1305 encryption/decryption benchmarks
+  benchmark       Measures ChaCha20-Poly1305 AEAD envelope throughput
 
 Global Options:
   --config <path> Path to configuration TOML file
