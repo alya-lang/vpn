@@ -85,9 +85,11 @@ jobs:
           Write-Host "Pinned C toolchain: $ToolchainBin"
           & $Compiler --version | Select-Object -First 1
 
+      # --fresh: a release artifact must be linked by the pinned toolchain,
+      # never materialized from a build-cache entry another gcc produced.
       - name: Build binary
         run: |
-          alya build -o ${{ matrix.target.binary }}
+          alya build -o ${{ matrix.target.binary }} --fresh
 
       # A clean end-user machine has none of the build image's MinGW DLLs:
       # run the exe with a stripped PATH so a missing runtime DLL (loader

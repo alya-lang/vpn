@@ -45,6 +45,28 @@ jobs:
         run: |
           alya --version
 
+      # The first gcc in PATH on the runner links gcc's default -lpthread
+      # against libwinpthread-1.dll, so built exes only started where that
+      # build-image DLL exists (alya-lang/vpn#9). Pin the minimal C toolchain
+      # setup-alya pre-installs before anything compiles: the build cache keys
+      # on the alya compiler, not the C toolchain, so artifacts cached here by
+      # the runner's gcc would be served to every later build in this job.
+      - name: Pin bundled C toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ToolchainBin = Join-Path $env:USERPROFILE ".alya\toolchain\bin"
+          $Compiler = @("gcc.exe", "clang.exe") |
+            ForEach-Object { Join-Path $ToolchainBin $_ } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+          if (-not $Compiler) {
+            throw "Alya C toolchain not found at $ToolchainBin (setup-alya should pre-install it)"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $ToolchainBin
+          Write-Host "Pinned C toolchain: $ToolchainBin"
+          & $Compiler --version | Select-Object -First 1
+
       - name: Install workspace dependencies
         run: |
           alya install
@@ -113,26 +135,6 @@ jobs:
       - name: Run benchmark
         run: |
           alya run src/main.alya -- benchmark
-
-      # The first gcc in PATH on the runner links gcc's default -lpthread
-      # against libwinpthread-1.dll, so built exes only started where that
-      # build-image DLL exists (alya-lang/vpn#9). Pin the minimal C toolchain
-      # setup-alya pre-installs; the guard below enforces a clean exe.
-      - name: Pin bundled C toolchain (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ToolchainBin = Join-Path $env:USERPROFILE ".alya\toolchain\bin"
-          $Compiler = @("gcc.exe", "clang.exe") |
-            ForEach-Object { Join-Path $ToolchainBin $_ } |
-            Where-Object { Test-Path $_ } |
-            Select-Object -First 1
-          if (-not $Compiler) {
-            throw "Alya C toolchain not found at $ToolchainBin (setup-alya should pre-install it)"
-          }
-          Add-Content -Path $env:GITHUB_PATH -Value $ToolchainBin
-          Write-Host "Pinned C toolchain: $ToolchainBin"
-          & $Compiler --version | Select-Object -First 1
 
       - name: Build standalone binary
         run: |
