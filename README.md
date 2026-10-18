@@ -292,6 +292,19 @@ alya run tests/test_e2e.alya
 alya run src/main.alya -- benchmark
 ```
 
+For a real end-to-end check (real server + client, real tunnel traffic), run the
+live smoke test. It serves an HTTP target on a non-loopback address, then
+verifies SOCKS5 and HTTP CONNECT tunneling plus split-tunnel include/exclude
+routing (and that `/healthz` reports the version from `alya.toml`):
+
+```bash
+# Linux / macOS
+alya build src/main.alya -o alya-vpn && ./scripts/live_smoke.sh ./alya-vpn
+
+# Windows (PowerShell)
+alya build src/main.alya -o alya-vpn.exe; ./scripts/live_smoke.ps1 ./alya-vpn.exe
+```
+
 ---
 
 ## 📁 Repository Structure

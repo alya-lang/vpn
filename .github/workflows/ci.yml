@@ -116,4 +116,19 @@ jobs:
 
       - name: Build standalone binary
         run: |
-          alya build src/main.alya -o alya-vpn
+          alya build src/main.alya -o alya-vpn${{ runner.os == 'Windows' && '.exe' || '' }}
+
+      # Live end-to-end test: starts a real server+client pair on the runner
+      # and proves tunneling (SOCKS5 + HTTP CONNECT) and split tunneling
+      # (include/exclude) against a non-loopback target on the runner itself.
+      - name: Live tunnel smoke test
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          ./scripts/live_smoke.sh ./alya-vpn
+
+      - name: Live tunnel smoke test
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/live_smoke.ps1 ./alya-vpn.exe
