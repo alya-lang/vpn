@@ -5,7 +5,11 @@
 
 FROM ubuntu:24.04 AS builder
 
-ARG ALYA_VERSION=0.0.19
+# Compiler used to build the server. Floor is v0.0.20: that release added
+# [workspace] support, which this repo's alya.toml requires (v0.0.19 cannot
+# parse it: "Unknown section '[workspace]'"). Default stays on the release
+# the CI matrix tests (setup-alya: latest).
+ARG ALYA_VERSION=0.0.21
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install runtime C build essentials and download utilities
