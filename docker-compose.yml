@@ -1,12 +1,19 @@
 services:
   vpn-server:
+    # Prebuilt multi-arch image (linux/amd64 + linux/arm64), published by
+    # .github/workflows/docker.yml. `docker compose up -d` pulls it; run
+    # `docker compose up -d --build` to compile from this checkout instead.
+    image: ghcr.io/alya-lang/vpn-server:latest
     build:
       context: .
       dockerfile: Dockerfile
     container_name: alya-vpn-server
     restart: unless-stopped
     ports:
-      - "51822:51822"
+      # Host port is overridable: on hosts where 51822 falls inside a
+      # Hyper-V/WSL excluded range (Windows Docker Desktop), start with
+      # VPN_PORT=52082 docker compose up -d
+      - "${VPN_PORT:-51822}:51822"
     environment:
       - TZ=UTC
     # NOTE: this check needs health_port = 18080 in the mounted

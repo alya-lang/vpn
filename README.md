@@ -156,16 +156,50 @@ alya build src/main.alya -o alya-vpn
 
 #### Option A: Using Docker & Docker Compose (Recommended)
 
-Run the headless server instantly in a lightweight container:
+Run the headless server instantly in a lightweight container. A prebuilt
+multi-arch image (`linux/amd64`, `linux/arm64`) is published to GHCR, so the
+host needs no Alya toolchain:
 
 ```bash
-# Clone and start with Docker Compose
+# Pull the published image and start the server
+docker compose up -d
+# Or compile the image from this checkout instead (needs network access)
 docker compose up -d --build
 ```
 To view logs:
 ```bash
 docker compose logs -f
 ```
+
+The container runs the shipped `config/server.toml`. **Change the default
+passphrase before exposing the server.** CLI flags override the config file,
+so a compose override is enough (no image edit, no rebuild):
+
+```yaml
+# compose.override.yml
+services:
+  vpn-server:
+    command: ["server", "--config", "/app/config/server.toml", "--pass", "your_secret"]
+```
+
+Deploying from **Portainer**: add a stack from the Git repository
+(`https://github.com/alya-lang/vpn`, compose path `docker-compose.yml`) and
+deploy. The web editor works too — paste the compose file and set
+`VPN_PORT` in the stack environment if needed; the prebuilt image makes the
+`build:` section unnecessary there.
+
+Windows (Docker Desktop) hosts: if the container fails with
+`ports are not available ... access denied`, host port 51822 sits inside a
+Hyper-V/WSL excluded range. Check with
+`netsh interface ipv4 show excludedportrange protocol=tcp` and map a free
+host port instead:
+
+```bash
+VPN_PORT=52082 docker compose up -d
+# clients then connect with: --server <host>:52082
+```
+(Or reclaim the reservation with `net stop winnat` / `net start winnat` in an
+admin shell.)
 
 #### Option B: Using Alya CLI directly
 
