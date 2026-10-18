@@ -199,9 +199,12 @@ To route Discord through Alya VPN:
 4. Text/API/gateway traffic is detected, matched, encrypted with ChaCha20-Poly1305, and forwarded through your remote VPS. Voice (UDP) needs an app that uses SOCKS5 UDP ASSOCIATE; raw Discord voice UDP bypasses any SOCKS proxy.
 
 ### macOS notes
-- The Alya runtime on ARM64 Macs can crash (`bus error`) while parsing the
-  documented `config/client.toml`. Use the lean `config/client.mac.toml`
-  instead (same values, no comment lines, short lines):
+- The `bus error` some older Alya releases hit while parsing the documented
+  `config/client.toml` on ARM64 Macs is fixed (alya-lang/vpn#6, alya#200);
+  current releases parse it fine, and the live CI smoke test runs exactly
+  this config on both macOS ARM64 and Intel runners. The lean
+  `config/client.mac.toml` (same values, no comment lines, short lines)
+  stays available as a fallback if you are pinned to an old compiler:
   `cp config/client.mac.toml config/client.local.toml`, set `server_host`
   to the real VPS IP there (never commit the real IP), then
   `./alya-vpn client --config config/client.local.toml`.
@@ -226,8 +229,8 @@ a proxy works, raw UDP/ICMP/ping from proxy-unaware apps does not enter it:
   and IPv6 (`127.0.0.1` + `[::1]` by default), and forwarding targets may
   be either family (IPv4 preferred). Apps using `localhost`/`::1` work.
   (Cosmetic: IPv6 SOCKS peers show as `[unknown:port]` because the Alya
-  runtime does not report v6 peer ports yet; routing by host rules is
-  unaffected.)
+  runtime does not report v6 peer ports yet; fixed in Alya develop and ships
+  with the next compiler release — routing by host rules is unaffected.)
 
 ---
 
