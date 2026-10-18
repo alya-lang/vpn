@@ -16,6 +16,19 @@ function vpn_version() -> string
     return "0.2.13"
 end
 
+# CLI <bool> values accept true/false and 1/0 (the documented form); anything
+# else must not be consumed, so bare switch flags keep working next to other
+# options (e.g. "client --kill-switch --mode all").
+function is_bool_word(s) -> bool
+    let v = lower(s)
+    return v == "true" or v == "1" or v == "false" or v == "0"
+end
+
+function bool_word_true(s) -> bool
+    let v = lower(s)
+    return v == "true" or v == "1"
+end
+
 function print_banner()
     say("=================================================================")
     say("            A L Y A   V P N   T U N N E L   (v" + vpn_version() + ")            ")
@@ -574,6 +587,15 @@ function main()
             else if args_list[i] == "--no-block-lan"
                 block_lan = 0
                 i += 1
+            # --block-lan honours the documented "<bool>" form: "false"/"0"
+            # disables SSRF blocking instead of being dropped as a stray arg.
+            else if args_list[i] == "--block-lan" and i + 1 < len(args_list) and is_bool_word(args_list[i + 1])
+                if bool_word_true(args_list[i + 1])
+                    block_lan = 1
+                else
+                    block_lan = 0
+                end
+                i += 2
             else if args_list[i] == "--block-lan"
                 block_lan = 1
                 i += 1
@@ -961,6 +983,15 @@ function main()
                         bypass_lan_ranges.push(it)
                     end
                     k += 1
+                end
+                i += 2
+            # --kill-switch honours the documented "<bool>" form (see
+            # is_bool_word); a bare flag still means ON.
+            else if args_list[i] == "--kill-switch" and i + 1 < len(args_list) and is_bool_word(args_list[i + 1])
+                if bool_word_true(args_list[i + 1])
+                    kill_switch = 1
+                else
+                    kill_switch = 0
                 end
                 i += 2
             else if args_list[i] == "--kill-switch"
