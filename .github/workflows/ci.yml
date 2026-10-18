@@ -114,9 +114,42 @@ jobs:
         run: |
           alya run src/main.alya -- benchmark
 
+      # The first gcc in PATH on the runner links gcc's default -lpthread
+      # against libwinpthread-1.dll, so built exes only started where that
+      # build-image DLL exists (alya-lang/vpn#9). Pin the minimal C toolchain
+      # setup-alya pre-installs; the guard below enforces a clean exe.
+      - name: Pin bundled C toolchain (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $ToolchainBin = Join-Path $env:USERPROFILE ".alya\toolchain\bin"
+          $Compiler = @("gcc.exe", "clang.exe") |
+            ForEach-Object { Join-Path $ToolchainBin $_ } |
+            Where-Object { Test-Path $_ } |
+            Select-Object -First 1
+          if (-not $Compiler) {
+            throw "Alya C toolchain not found at $ToolchainBin (setup-alya should pre-install it)"
+          }
+          Add-Content -Path $env:GITHUB_PATH -Value $ToolchainBin
+          Write-Host "Pinned C toolchain: $ToolchainBin"
+          & $Compiler --version | Select-Object -First 1
+
       - name: Build standalone binary
         run: |
           alya build src/main.alya -o alya-vpn${{ runner.os == 'Windows' && '.exe' || '' }}
+
+      # A clean end-user machine has none of the build image's MinGW DLLs:
+      # run the exe with a stripped PATH so a missing runtime DLL (loader
+      # error, e.g. 0xc0000135) fails the job instead of shipping.
+      - name: Verify binary loads on a clean machine (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:PATH = "$env:SystemRoot\system32;$env:SystemRoot"
+          & ".\alya-vpn.exe"
+          if ($LASTEXITCODE -ne 0) {
+            throw "alya-vpn.exe failed to start with a clean-machine PATH (exit $LASTEXITCODE); it likely imports a build-image DLL such as libwinpthread-1.dll"
+          }
 
       # Live end-to-end test: starts a real server+client pair on the runner
       # and proves tunneling (SOCKS5 + HTTP CONNECT) and split tunneling
